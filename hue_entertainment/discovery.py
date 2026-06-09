@@ -35,7 +35,7 @@ async def discover_bridges(timeout: float = _DEFAULT_TIMEOUT) -> list[Discovered
     pending: list[asyncio.Task[None]] = []
 
     def on_change(
-        _zeroconf: object,
+        zeroconf: object,  # noqa: ARG001 - name must match zeroconf's keyword call
         service_type: str,
         name: str,
         state_change: ServiceStateChange,

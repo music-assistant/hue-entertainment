@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any
 
-from hue_entertainment.discovery import DiscoveredBridge, _resolve
+from zeroconf import ServiceStateChange
+
+from hue_entertainment.discovery import DiscoveredBridge, _resolve, discover_bridges
 
 
 class _FakeServiceInfo:
@@ -48,3 +51,51 @@ async def test_resolve_populates_bridge(monkeypatch: Any) -> None:
     assert bridge.host == "192.168.1.50"
     assert bridge.id == "ABCDEF1234"
     assert bridge.name == "Philips-hue.local"
+
+
+class _FakeBrowser:
+    """Captures the state-change handler passed by discover_bridges."""
+
+    captured: Any = None
+
+    def __init__(self, _zc: object, _service_type: str, *, handlers: list[Any]) -> None:
+        """Record the handler so the test can invoke it like zeroconf does."""
+        type(self).captured = handlers[0]
+
+    async def async_cancel(self) -> None:
+        """No-op cancel."""
+
+
+class _FakeAioZc:
+    """Minimal stand-in for AsyncZeroconf."""
+
+    def __init__(self) -> None:
+        """Expose a dummy zeroconf attribute."""
+        self.zeroconf = object()
+
+    async def async_close(self) -> None:
+        """No-op close."""
+
+
+async def test_browse_handler_accepts_zeroconf_keyword_call(monkeypatch: Any) -> None:
+    """Zeroconf invokes the handler with keyword args; the names must match (regression)."""
+    resolved: list[str] = []
+
+    async def fake_resolve(_aiozc: Any, _service_type: str, name: str, _bridges: Any) -> None:
+        resolved.append(name)
+
+    monkeypatch.setattr("hue_entertainment.discovery.AsyncZeroconf", _FakeAioZc)
+    monkeypatch.setattr("hue_entertainment.discovery.AsyncServiceBrowser", _FakeBrowser)
+    monkeypatch.setattr("hue_entertainment.discovery._resolve", fake_resolve)
+
+    task = asyncio.ensure_future(discover_bridges(0.2))
+    await asyncio.sleep(0.05)
+    # This mirrors exactly how zeroconf calls the handler (all keyword arguments).
+    _FakeBrowser.captured(
+        zeroconf=None,
+        service_type="_hue._tcp.local.",
+        name="bridge._hue._tcp.local.",
+        state_change=ServiceStateChange.Added,
+    )
+    await task
+    assert resolved == ["bridge._hue._tcp.local."]
