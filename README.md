@@ -2,25 +2,39 @@
 
 Async Python client for the **Philips Hue Entertainment** streaming API.
 
-A small, dependency-light library that pairs with a Hue bridge, discovers entertainment
-areas, and streams color frames to the lights over **DTLS 1.2 PSK** using the `HueStream`
-protocol — with **as little latency as possible**. Works with both the Hue **V2**
-("square") bridge and the new Hue **Pro** bridge.
+It pairs with a Hue bridge, discovers entertainment areas, and streams colour frames to the
+lights over **DTLS 1.2 PSK** using the `HueStream` protocol with minimal latency. It works
+with both the Hue **V2** ("square") bridge and the Hue **Pro** bridge.
 
-The DTLS handshake and record layer are implemented in pure Python on top of
+The DTLS 1.2 PSK handshake, record layer and HueStream encoder are pure Python on top of
 [`cryptography`](https://cryptography.io/) — no `openssl` subprocess, no C bindings, no
-other DTLS dependency. Blocking socket I/O is confined to a dedicated sender thread so it
+other DTLS dependency. Blocking socket I/O is confined to a dedicated sender thread, so it
 never blocks your asyncio event loop.
 
-> Extracted from [Music Assistant](https://github.com/music-assistant/server)'s
-> `hue_entertainment` provider so it can be shared across projects (e.g. Music Assistant
-> and [ambilight-hue-pro-bridge](https://github.com/marcelveldt/ambilight-hue-pro-bridge)).
+It powers the Hue Entertainment plugin (the Sendspin bridge) in
+[Music Assistant](https://github.com/music-assistant/server) and the
+[ambilight-hue-pro-bridge](https://github.com/marcelveldt/ambilight-hue-pro-bridge).
 
-## Status
+## What it provides
 
-Early standalone release. The core (pairing, area discovery, DTLS streaming, HueStream v2
-encoding) is the same code that is *"working and tested on Hue Bridge V2 and Hue Bridge
-Pro"* in Music Assistant. The async `EntertainmentSession` lifecycle wrapper is new.
+- **Pairing** — create an application key and the DTLS client key (`HueEntertainmentAPI.pair`).
+- **Discovery** — list a bridge's entertainment configurations with their channels and positions.
+- **Streaming** — start/stop an entertainment stream and push per-channel colours at up to ~50 Hz.
+- **`EntertainmentSession`** — a high-level async facade that opens the stream on demand, runs
+  the blocking DTLS work in an executor, enforces the bridge's single-active-stream constraint,
+  and tears the stream down after inactivity.
+- Works with the V2 and Pro bridges, with `aiohttp` + `cryptography` as the only dependencies.
+
+## What you can build with it
+
+Anything that drives Hue lights from a fast colour source — screen / Ambilight sync, music
+visualisers, games, rich notifications, or your own virtual bridge — without the Hue Sync
+hardware.
+
+## Planned extensions
+
+- HueStream **v1** framing and the **CIE xy** colour space (currently HueStream v2 / RGB).
+- mDNS-based bridge discovery helpers.
 
 ## Install
 

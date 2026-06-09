@@ -5,7 +5,7 @@ Provides a pure-Python DTLS 1.2 PSK streaming client and HueStream encoder for t
 Hue Entertainment API, working with both the Hue V2 ("square") bridge and the Hue Pro
 bridge. No openssl subprocess and no C bindings beyond the `cryptography` package.
 
-Extracted from Music Assistant's `hue_entertainment` provider for reuse across projects.
+Used by Music Assistant for its Hue Entertainment plugin (the Sendspin bridge).
 """
 
 from .api import HueEntertainmentAPI

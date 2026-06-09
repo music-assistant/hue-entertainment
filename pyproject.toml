@@ -4,7 +4,7 @@ requires = ["setuptools>=62.3"]
 
 [project]
 authors = [
-  {name = "Marcel van der Veldt", email = "marcel.vanderveldt@openhomefoundation.org"},
+  {name = "The Music Assistant Authors", email = "marcelveldt@users.noreply.github.com"},
 ]
 classifiers = [
   "Environment :: Console",

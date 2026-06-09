@@ -2,7 +2,8 @@
 
 `hue-entertainment` is an async Python client for the Philips Hue Entertainment streaming
 API: pairing, entertainment-area discovery, and low-latency DTLS-PSK / HueStream streaming
-to a Hue V2 or Pro bridge. Extracted from Music Assistant for reuse across projects.
+to a Hue V2 or Pro bridge. It powers the Hue Entertainment plugin (the Sendspin bridge) in
+Music Assistant.
 
 ## Behaviour
 
