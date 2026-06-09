@@ -1,0 +1,141 @@
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools>=62.3"]
+
+[project]
+authors = [
+  {name = "Marcel van der Veldt", email = "marcel.vanderveldt@openhomefoundation.org"},
+]
+classifiers = [
+  "Environment :: Console",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+  "aiohttp>=3.9",
+  "cryptography>=42.0",
+]
+description = "Async Python client for the Philips Hue Entertainment streaming API (DTLS-PSK + HueStream)."
+license = {text = "Apache-2.0"}
+name = "hue-entertainment"
+readme = "README.md"
+requires-python = ">=3.11"
+# The version is set by a GH action on release.
+version = "0.0.0"
+
+[project.optional-dependencies]
+test = [
+  "codespell==2.4.2",
+  "mypy==2.1.0",
+  "pre-commit==4.6.0",
+  "pre-commit-hooks==6.0.0",
+  "pytest==9.0.3",
+  "pytest-aiohttp==1.1.1",
+  "pytest-asyncio==1.4.0",
+  "pytest-cov==7.1.0",
+  "ruff==0.15.16",
+]
+
+[project.urls]
+"Bug Reports" = "https://github.com/music-assistant/hue-entertainment/issues"
+"Source Code" = "https://github.com/music-assistant/hue-entertainment"
+
+[tool.setuptools]
+include-package-data = true
+platforms = ["any"]
+zip-safe = false
+
+[tool.setuptools.package-data]
+hue_entertainment = ["py.typed"]
+
+[tool.setuptools.packages.find]
+include = ["hue_entertainment*"]
+
+[tool.ruff]
+fix = true
+show-fixes = true
+
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint.pydocstyle]
+# Sphinx-style docstrings with :param: syntax; pep257 is the base convention.
+convention = "pep257"
+
+[tool.ruff.lint.pylint]
+max-args = 20
+max-branches = 25
+max-returns = 15
+max-statements = 50
+
+[tool.mypy]
+platform = "linux"
+python_version = "3.11"
+
+follow_imports = "normal"
+ignore_missing_imports = true
+
+# be strict
+check_untyped_defs = true
+disallow_any_generics = true
+disallow_incomplete_defs = true
+disallow_subclassing_any = true
+disallow_untyped_calls = true
+disallow_untyped_decorators = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+no_implicit_reexport = true
+strict_optional = true
+warn_incomplete_stub = true
+warn_no_return = true
+warn_redundant_casts = true
+warn_return_any = true
+warn_unused_configs = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+addopts = "--cov"
+asyncio_mode = "auto"
+
+[tool.ruff.lint]
+ignore = [
+  "ANN002", # Just annoying, not really useful
+  "ANN003", # Just annoying, not really useful
+  "ANN401", # Opinioated warning on disallowing dynamically typed expressions
+  "A003", # Intentional: dataclass `id` field matches the Hue/CLIP resource naming
+  "D203", # Conflicts with other rules
+  "D213", # Conflicts with other rules
+  "D417", # False positives in some occasions
+  "EM101", # Just annoying, not really useful
+  "FIX002", # Just annoying, not really useful
+  "PLR2004", # Just annoying, not really useful
+  "PD011", # Just annoying, not really useful
+  "S101", # assert is often used to satisfy type checking
+  "TD002", # Just annoying, not really useful
+  "TD003", # Just annoying, not really useful
+  "TD004", # Just annoying, not really useful
+  "TRY003", # Just annoying, not really useful
+  "COM812", # Conflicts with the Ruff formatter
+  "ISC001", # Conflicts with the Ruff formatter
+  "FBT001", # Very opniated and not useful
+  "ERA001", # False positives on byte-layout / documentation comments
+  "TC001", # With `from __future__ import annotations`, runtime import cost is nil
+  "TC003", # idem (stdlib typing-only imports)
+]
+
+select = ["ALL"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests legitimately poke at private members and use magic values.
+"tests/*" = ["SLF001", "PLR2004"]
+
+[tool.ruff.lint.flake8-pytest-style]
+fixture-parentheses = false
+mark-parentheses = false
+
+[tool.ruff.lint.isort]
+known-first-party = ["hue_entertainment"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 25
