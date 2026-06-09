@@ -15,6 +15,7 @@ classifiers = [
 dependencies = [
   "aiohttp>=3.9",
   "cryptography>=42.0",
+  "zeroconf>=0.130",
 ]
 description = "Async Python client for the Philips Hue Entertainment streaming API (DTLS-PSK + HueStream)."
 license = {text = "Apache-2.0"}
@@ -119,6 +120,7 @@ ignore = [
   "COM812", # Conflicts with the Ruff formatter
   "ISC001", # Conflicts with the Ruff formatter
   "FBT001", # Very opniated and not useful
+  "ASYNC109", # `timeout` is a deliberate part of the public discover_bridges() API
   "ERA001", # False positives on byte-layout / documentation comments
   "TC001", # With `from __future__ import annotations`, runtime import cost is nil
   "TC003", # idem (stdlib typing-only imports)

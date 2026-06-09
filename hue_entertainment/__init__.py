@@ -1,23 +1,25 @@
 """
 Async Python client for the Philips Hue Entertainment streaming API.
 
-Provides a pure-Python DTLS 1.2 PSK streaming client and HueStream encoder for the
-Hue Entertainment API, working with both the Hue V2 ("square") bridge and the Hue Pro
-bridge. No openssl subprocess and no C bindings beyond the `cryptography` package.
-
-Used by Music Assistant for its Hue Entertainment plugin (the Sendspin bridge).
+Provides bridge discovery (mDNS), a pure-Python DTLS 1.2 PSK streaming client and a
+HueStream encoder for the Hue Entertainment API, working with both the Hue V2 ("square")
+bridge and the Hue Pro bridge. No openssl subprocess and no C bindings beyond the
+`cryptography` package.
 """
 
 from .api import HueEntertainmentAPI
+from .discovery import DiscoveredBridge, discover_bridges
 from .dtls import HueDtlsStreamer
 from .models import EntertainmentArea, LightChannel, LightColorCommand
 from .session import EntertainmentSession
 
 __all__ = [
+    "DiscoveredBridge",
     "EntertainmentArea",
     "EntertainmentSession",
     "HueDtlsStreamer",
     "HueEntertainmentAPI",
     "LightChannel",
     "LightColorCommand",
+    "discover_bridges",
 ]

@@ -1,9 +1,8 @@
 # AGENTS.md
 
-`hue-entertainment` is an async Python client for the Philips Hue Entertainment streaming
-API: pairing, entertainment-area discovery, and low-latency DTLS-PSK / HueStream streaming
-to a Hue V2 or Pro bridge. It powers the Hue Entertainment plugin (the Sendspin bridge) in
-Music Assistant.
+`hue-entertainment` is a standalone async Python client for the Philips Hue Entertainment
+streaming API: bridge discovery (mDNS), pairing, entertainment-area discovery, and
+low-latency DTLS-PSK / HueStream streaming to a Hue V2 or Pro bridge.
 
 ## Behaviour
 

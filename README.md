@@ -17,13 +17,14 @@ It powers the Hue Entertainment plugin (the Sendspin bridge) in
 
 ## What it provides
 
+- **Bridge discovery** — find Hue bridges on the LAN via mDNS (`discover_bridges`).
 - **Pairing** — create an application key and the DTLS client key (`HueEntertainmentAPI.pair`).
-- **Discovery** — list a bridge's entertainment configurations with their channels and positions.
+- **Areas** — list a bridge's entertainment configurations with their channels and positions.
 - **Streaming** — start/stop an entertainment stream and push per-channel colours at up to ~50 Hz.
 - **`EntertainmentSession`** — a high-level async facade that opens the stream on demand, runs
   the blocking DTLS work in an executor, enforces the bridge's single-active-stream constraint,
   and tears the stream down after inactivity.
-- Works with the V2 and Pro bridges, with `aiohttp` + `cryptography` as the only dependencies.
+- Works with the V2 and Pro bridges; dependencies are `aiohttp`, `cryptography` and `zeroconf`.
 
 ## What you can build with it
 
@@ -34,7 +35,6 @@ hardware.
 ## Planned extensions
 
 - HueStream **v1** framing and the **CIE xy** colour space (currently HueStream v2 / RGB).
-- mDNS-based bridge discovery helpers.
 
 ## Install
 
@@ -42,7 +42,7 @@ hardware.
 pip install hue-entertainment
 ```
 
-Requires Python 3.11+. Runtime dependencies: `aiohttp`, `cryptography`.
+Requires Python 3.11+. Runtime dependencies: `aiohttp`, `cryptography`, `zeroconf`.
 
 ## Usage
 
