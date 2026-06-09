@@ -58,6 +58,11 @@ class EntertainmentSession:
         """Return the bridge host."""
         return self._api.host
 
+    @host.setter
+    def host(self, value: str) -> None:
+        """Update the bridge host (e.g. after a DHCP renewal); applied on the next stream."""
+        self._api.host = value
+
     @property
     def is_streaming(self) -> bool:
         """Return True while a DTLS stream is active."""

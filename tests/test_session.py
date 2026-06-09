@@ -178,3 +178,11 @@ async def test_sends_keep_stream_alive() -> None:
         await asyncio.sleep(0.05)
     assert session.is_streaming
     assert await _wait_until(lambda: not session.is_streaming)
+
+
+def test_host_setter_updates_api() -> None:
+    """Setting the session host updates the underlying API host."""
+    session = EntertainmentSession("1.2.3.4", "user", "deadbeef")
+    session.host = "5.6.7.8"
+    assert session.host == "5.6.7.8"
+    assert session._api.host == "5.6.7.8"

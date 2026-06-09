@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
@@ -160,3 +161,51 @@ class TestHueEntertainmentAPI:
         api._session = mock_session
         await api.close()
         mock_session.close.assert_called_once()
+
+
+async def test_pair_uses_given_device_type(api: HueEntertainmentAPI) -> None:
+    """pair() registers with the supplied device type."""
+    mock_session = AsyncMock()
+    mock_resp = AsyncMock()
+    mock_resp.json = AsyncMock(return_value=[{"success": {"username": "u", "clientkey": "k"}}])
+    mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_resp.__aexit__ = AsyncMock(return_value=False)
+    mock_session.post = MagicMock(return_value=mock_resp)
+    mock_session.closed = False
+    with patch.object(api, "_get_session", new_callable=AsyncMock, return_value=mock_session):
+        await api.pair(device_type="myapp#dev")
+    assert mock_session.post.call_args.kwargs["json"]["devicetype"] == "myapp#dev"
+
+
+async def test_get_entertainment_areas_resolves_names(api: HueEntertainmentAPI) -> None:
+    """Channel names resolve through entertainment service -> owner device -> name."""
+
+    async def fake_request(_method: str, path: str, _json_data: Any = None) -> dict[str, Any]:
+        """Return canned CLIP v2 resources per path."""
+        if path.endswith("entertainment_configuration"):
+            return {
+                "data": [
+                    {
+                        "id": "area-1",
+                        "metadata": {"name": "Living"},
+                        "channels": [
+                            {
+                                "channel_id": 0,
+                                "position": {"x": 0.0, "y": 0.0, "z": 0.0},
+                                "members": [
+                                    {"service": {"rid": "ent-1", "rtype": "entertainment"}}
+                                ],
+                            },
+                        ],
+                    },
+                ],
+            }
+        if path.endswith("/device"):
+            return {"data": [{"id": "dev-1", "metadata": {"name": "Couch Lamp"}}]}
+        if path.endswith("/entertainment"):
+            return {"data": [{"id": "ent-1", "owner": {"rid": "dev-1", "rtype": "device"}}]}
+        return {"data": []}
+
+    with patch.object(api, "_request", fake_request):
+        areas = await api.get_entertainment_areas()
+    assert areas[0].channels[0].name == "Couch Lamp"

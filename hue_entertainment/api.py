@@ -51,17 +51,20 @@ class HueEntertainmentAPI:
             await self._session.close()
             self._session = None
 
-    async def pair(self) -> dict[str, str]:
+    async def pair(self, device_type: str = "hue_entertainment#bridge") -> dict[str, str]:
         """
-        Pair with the Hue bridge (user must press the bridge button).
+        Pair with the Hue bridge (the user must press the bridge button first).
 
-        Retries for up to PAIR_TIMEOUT seconds. Returns a dict with
-        'username' and 'clientkey' keys.
+        Retries for up to PAIR_TIMEOUT seconds. Returns a dict with 'username' and
+        'clientkey' keys.
+
+        :param device_type: The ``devicetype`` registered with the bridge; it appears in
+            the Hue app's list of connected apps (format ``appname#devicename``).
         """
         session = await self._get_session()
         url = f"{self.base_url}/api"
         body = {
-            "devicetype": "hue_entertainment#bridge",
+            "devicetype": device_type,
             "generateclientkey": True,
         }
         deadline = asyncio.get_running_loop().time() + PAIR_TIMEOUT
@@ -100,12 +103,17 @@ class HueEntertainmentAPI:
         raise TimeoutError(msg)
 
     async def get_entertainment_areas(self) -> list[EntertainmentArea]:
-        """Fetch all entertainment configurations from the bridge."""
+        """
+        Fetch all entertainment configurations from the bridge.
+
+        Each channel's ``name`` is resolved to the underlying light/device name where
+        possible (so callers can show real names rather than channel numbers).
+        """
         result = await self._request("GET", "/clip/v2/resource/entertainment_configuration")
+        names = await self._resolve_service_names()
         areas: list[EntertainmentArea] = []
 
-        data = result.get("data", []) if isinstance(result, dict) else result
-        for config in data:
+        for config in _data(result):
             area_id = config.get("id", "")
             name = config.get("metadata", {}).get("name", "Unknown Area")
             channels: list[LightChannel] = []
@@ -127,7 +135,7 @@ class HueEntertainmentAPI:
                     LightChannel(
                         channel_id=ch_id,
                         service_id=service_id,
-                        name=f"Channel {ch_id}",
+                        name=names.get(service_id) or f"Channel {ch_id}",
                         position=position,
                     )
                 )
@@ -135,6 +143,32 @@ class HueEntertainmentAPI:
             areas.append(EntertainmentArea(id=area_id, name=name, channels=channels))
 
         return areas
+
+    async def _resolve_service_names(self) -> dict[str, str]:
+        """Map channel service rids (light or entertainment) to human-readable names."""
+        names: dict[str, str] = {}
+        try:
+            devices = await self._request("GET", "/clip/v2/resource/device")
+            lights = await self._request("GET", "/clip/v2/resource/light")
+            entertainments = await self._request("GET", "/clip/v2/resource/entertainment")
+        except Exception:  # noqa: BLE001 - names are a best-effort enrichment
+            return names
+        device_names = {
+            device.get("id", ""): device.get("metadata", {}).get("name", "")
+            for device in _data(devices)
+        }
+        for light in _data(lights):
+            label = light.get("metadata", {}).get("name") or device_names.get(
+                light.get("owner", {}).get("rid", ""),
+                "",
+            )
+            if label:
+                names[light.get("id", "")] = label
+        for entertainment in _data(entertainments):
+            owner = entertainment.get("owner", {}).get("rid", "")
+            if device_names.get(owner):
+                names[entertainment.get("id", "")] = device_names[owner]
+        return names
 
     async def start_entertainment(self, area_id: str) -> None:
         """Start entertainment mode for the given area."""
@@ -192,3 +226,13 @@ class HueEntertainmentAPI:
         async with session.request(method, url, headers=headers, json=json_data, ssl=False) as resp:
             resp.raise_for_status()
             return await resp.json()
+
+
+def _data(result: Any) -> list[Any]:
+    """Return the CLIP v2 ``data`` list from a response (or the response if already a list)."""
+    if isinstance(result, list):
+        return result
+    if isinstance(result, dict):
+        inner = result.get("data", [])
+        return inner if isinstance(inner, list) else []
+    return []
