@@ -191,6 +191,27 @@ class HueEntertainmentAPI:
         except Exception as err:  # noqa: BLE001 - stop is best-effort cleanup
             LOGGER.debug("Error stopping entertainment mode: %s", err)
 
+    async def get_entertainment_status(self, area_id: str) -> tuple[str, str]:
+        """
+        Return ``(status, active_streamer_rid)`` for one entertainment configuration.
+
+        A lightweight single GET (no name resolution) intended for liveness polling. ``status``
+        is ``"active"`` or ``"inactive"``; ``active_streamer_rid`` is the rid of the auth
+        currently streaming the area, or ``""`` when none is.
+
+        :param area_id: Id of the entertainment configuration to query.
+        """
+        result = await self._request(
+            "GET", f"/clip/v2/resource/entertainment_configuration/{area_id}"
+        )
+        data = _data(result)
+        config = data[0] if data else {}
+        if not isinstance(config, dict):
+            return ("", "")
+        active_streamer = config.get("active_streamer")
+        rid = active_streamer.get("rid", "") if isinstance(active_streamer, dict) else ""
+        return (config.get("status", ""), rid)
+
     async def get_bridge_id(self) -> str | None:
         """Fetch the bridge ID from the config endpoint."""
         try:

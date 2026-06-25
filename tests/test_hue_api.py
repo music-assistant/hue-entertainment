@@ -111,6 +111,32 @@ class TestHueEntertainmentAPI:
             # Should not raise
             await api.stop_entertainment("test-area-id")
 
+    async def test_get_entertainment_status(self, api: HueEntertainmentAPI) -> None:
+        """The status getter returns the area's status and active streamer rid."""
+        mock_response = {
+            "data": [
+                {
+                    "id": "area-1",
+                    "status": "active",
+                    "active_streamer": {"rid": "auth-1", "rtype": "auth_v1"},
+                },
+            ],
+        }
+        with patch.object(api, "_request", new_callable=AsyncMock, return_value=mock_response):
+            status, rid = await api.get_entertainment_status("area-1")
+        assert status == "active"
+        assert rid == "auth-1"
+
+    async def test_get_entertainment_status_inactive_and_empty(
+        self, api: HueEntertainmentAPI
+    ) -> None:
+        """Inactive yields ('inactive', '') and a missing config yields ('', '')."""
+        inactive = {"data": [{"id": "area-1", "status": "inactive"}]}
+        with patch.object(api, "_request", new_callable=AsyncMock, return_value=inactive):
+            assert await api.get_entertainment_status("area-1") == ("inactive", "")
+        with patch.object(api, "_request", new_callable=AsyncMock, return_value={"data": []}):
+            assert await api.get_entertainment_status("area-x") == ("", "")
+
     async def test_pair_success(self, api: HueEntertainmentAPI) -> None:
         """Test successful pairing returns credentials."""
         mock_session = AsyncMock()

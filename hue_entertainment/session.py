@@ -77,6 +77,18 @@ class EntertainmentSession:
         """Return the entertainment configurations available on the bridge."""
         return await self._api.get_entertainment_areas()
 
+    async def remote_status(self) -> tuple[str, str]:
+        """
+        Return the bridge's ``(status, active_streamer_rid)`` for the active area.
+
+        Lets a caller detect that the bridge silently ended the stream (status no longer
+        ``"active"``) or that another controller took it over - which the one-way DTLS stream
+        cannot signal on its own. Returns ``("", "")`` when no area is active.
+        """
+        if self._area_id is None:
+            return ("", "")
+        return await self._api.get_entertainment_status(self._area_id)
+
     async def start(self, area_id: str, *, stop_others: bool = True) -> None:
         """
         Activate the entertainment area and open the DTLS stream (idempotent per area).
