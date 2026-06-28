@@ -6,8 +6,10 @@ import uuid
 
 import pytest
 
+from hue_entertainment.color import ColorMode
 from hue_entertainment.constants import (
     COLOR_SPACE_RGB,
+    COLOR_SPACE_XY,
     HUESTREAM_HEADER,
     HUESTREAM_VERSION,
 )
@@ -76,6 +78,26 @@ class TestHueStreamMessage:
         """Test that empty commands produce a header-only message."""
         msg = streamer._build_huestream_message([])
         assert len(msg) == FULL_HEADER_SIZE
+
+    def test_color_mode_sets_xy_color_space(self, streamer: HueDtlsStreamer) -> None:
+        """The xy colour modes flip the header colour-space byte; the 7-byte frame size holds."""
+        cmd = LightColorCommand(channel_id=0, red=65535, green=0, blue=0)
+        streamer.set_color_mode(ColorMode.RGB)
+        assert streamer._build_huestream_message([cmd])[14] == COLOR_SPACE_RGB
+        for mode in (ColorMode.XY, ColorMode.VIVID):
+            streamer.set_color_mode(mode)
+            msg = streamer._build_huestream_message([cmd])
+            assert msg[14] == COLOR_SPACE_XY
+            assert len(msg) == FULL_HEADER_SIZE + CHANNEL_SIZE
+
+    def test_vivid_more_saturated_than_accurate_xy(self, streamer: HueDtlsStreamer) -> None:
+        """Vivid encodes a redder (gamut-edge) x than the colour-accurate xy mode for pure red."""
+        cmd = LightColorCommand(channel_id=0, red=65535, green=0, blue=0)
+        streamer.set_color_mode(ColorMode.XY)
+        xy = streamer._build_huestream_message([cmd])[FULL_HEADER_SIZE:]
+        streamer.set_color_mode(ColorMode.VIVID)
+        vivid = streamer._build_huestream_message([cmd])[FULL_HEADER_SIZE:]
+        assert (vivid[1] << 8 | vivid[2]) > (xy[1] << 8 | xy[2])
 
     def test_single_channel_message(self, streamer: HueDtlsStreamer) -> None:
         """Test message with a single light channel (duplicated-byte color format)."""

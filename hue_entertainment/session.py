@@ -8,6 +8,7 @@ import time
 from contextlib import suppress
 
 from .api import HueEntertainmentAPI
+from .color import ColorMode
 from .dtls import HueDtlsStreamer
 from .models import EntertainmentArea, LightColorCommand
 
@@ -34,6 +35,7 @@ class EntertainmentSession:
         client_key: str,
         *,
         idle_timeout: float = DEFAULT_IDLE_TIMEOUT_S,
+        color_mode: ColorMode = ColorMode.RGB,
     ) -> None:
         """
         Initialize the session for a single bridge (no network I/O until :meth:`start`).
@@ -42,12 +44,15 @@ class EntertainmentSession:
         :param app_key: Bridge application key (the CLIP v2 username); also the DTLS PSK identity.
         :param client_key: The hex client key from pairing, used as the DTLS pre-shared key.
         :param idle_timeout: Seconds of inactivity after which the stream is torn down; 0 disables.
+        :param color_mode: How colours are encoded - raw ``RGB`` (default, widest range),
+            gamut-accurate ``XY``, or punchy ``VIVID``; see :class:`.ColorMode`.
         """
         self._api = HueEntertainmentAPI(host, app_key)
         self._streamer = HueDtlsStreamer()
         self._app_key = app_key
         self._client_key = client_key
         self._idle_timeout = idle_timeout
+        self._color_mode = color_mode
         self._area_id: str | None = None
         self._lock = asyncio.Lock()
         self._idle_task: asyncio.Task[None] | None = None
@@ -123,6 +128,9 @@ class EntertainmentSession:
                 raise
 
             self._area_id = area_id
+            # Per-light gamut data is not yet discovered, so the xy modes use the widest
+            # gamut (C) for every channel.
+            self._streamer.set_color_mode(self._color_mode)
             self._last_send = time.monotonic()
             if self._idle_timeout > 0:
                 self._idle_task = asyncio.create_task(self._idle_monitor())

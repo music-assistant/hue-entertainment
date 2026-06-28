@@ -34,7 +34,8 @@ hardware.
 
 ## Planned extensions
 
-- HueStream **v1** framing and the **CIE xy** colour space (currently HueStream v2 / RGB).
+- HueStream **v1** framing (currently HueStream v2). The **CIE xy** colour space is supported
+  via colour modes — see below.
 
 ## Install
 
@@ -80,6 +81,20 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
+## Colour modes
+
+`EntertainmentSession(..., color_mode=...)` (or `streamer.set_color_mode(...)`) chooses how your
+RGB colours are encoded into the stream:
+
+| Mode | What it does | When it makes sense | Trade-off |
+| --- | --- | --- | --- |
+| `ColorMode.RGB` *(default)* | Raw RGB; the bridge maps it to each bulb's full native gamut | A vivid, dynamic show — widest colour range, most organic fades | Same RGB can look slightly different across mixed Hue models |
+| `ColorMode.XY` | Converts to the bulb's CIE xy gamut (colour-accurate, hardware-independent) | Consistent, matching colour across different Hue models | Narrower range; steadier (less organic) fades |
+| `ColorMode.VIVID` | Like `XY` but stretches saturated colours to the gamut edge | Cross-model consistency without losing punch | Hue is approximate (pushed to the edge), not colour-accurate |
+
+Per Philips' own guidance, **RGB gives the widest colour range per bulb** while **xy gives colour
+consistency** across lamp types — pick by whether range/dynamics or cross-model accuracy matters.
+
 ## API
 
 - **`HueEntertainmentAPI(host, app_key=None)`** — low-level CLIP v2 wrapper:
@@ -88,7 +103,7 @@ asyncio.run(main())
 - **`HueDtlsStreamer()`** — low-level DTLS/HueStream streamer:
   `connect(host, username, clientkey, area_id)` (blocking — run in an executor),
   `send_colors([...])`, `disconnect()`, `is_connected`.
-- **`EntertainmentSession(host, app_key, client_key, *, idle_timeout=10.0)`** — the
+- **`EntertainmentSession(host, app_key, client_key, *, idle_timeout=10.0, color_mode=ColorMode.RGB)`** — the
   recommended high-level facade: on-demand `start(area_id)`, non-blocking `send(...)`,
   `stop()` / `aclose()`, automatic idle teardown, and enforcement of the bridge's
   single-active-stream constraint. The blocking DTLS work runs in an executor for you.

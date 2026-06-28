@@ -13,6 +13,7 @@ class LightChannel:
     service_id: str
     name: str
     position: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    gamut: str | None = None  # bridge-reported colour gamut type ("A"/"B"/"C"), if known
 
 
 @dataclass
