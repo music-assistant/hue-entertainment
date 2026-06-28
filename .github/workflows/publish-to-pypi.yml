@@ -11,10 +11,23 @@ jobs:
     outputs:
       version: ${{ steps.vars.outputs.tag }}
     steps:
-      - uses: actions/checkout@v6
-      - name: Get tag
+      - name: Resolve version from the release
         id: vars
-        run: echo "tag=${GITHUB_REF#refs/*/}" >> $GITHUB_OUTPUT
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          # Use the release payload's tag (authoritative; GITHUB_REF is not reliably the tag on
+          # a release event) and fail fast rather than build an invalid (non-PEP440) version.
+          version="${TAG#v}"
+          if [ -z "$version" ]; then
+            echo "::error::Could not resolve a release version from the event tag '${TAG}'"
+            exit 1
+          fi
+          echo "tag=${version}" >> "$GITHUB_OUTPUT"
+      - name: Check out the released tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
       - name: Set up Python 3.10
         uses: actions/setup-python@v6.2.0
         with:
@@ -24,14 +37,17 @@ jobs:
           pip install build tomli tomli-w
       - name: Set Python project version from tag
         shell: python
+        env:
+          VERSION: ${{ steps.vars.outputs.tag }}
         run: |-
+          import os
           import tomli
           import tomli_w
 
           with open("pyproject.toml", "rb") as f:
             pyproject = tomli.load(f)
 
-          pyproject["project"]["version"] = "${{ steps.vars.outputs.tag }}"
+          pyproject["project"]["version"] = os.environ["VERSION"]
 
           with open("pyproject.toml", "wb") as f:
             tomli_w.dump(pyproject, f)
