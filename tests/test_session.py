@@ -24,6 +24,7 @@ class _FakeStreamer:
         self.connect_calls: list[tuple[str, str, str, str]] = []
         self.sent: list[list[LightColorCommand]] = []
         self.fail_connect = False
+        self.color_mode: object = None
 
     @property
     def is_connected(self) -> bool:
@@ -46,6 +47,10 @@ class _FakeStreamer:
         """Record a frame if connected."""
         if self.connected:
             self.sent.append(commands)
+
+    def set_color_mode(self, mode: object, _gamuts: object = None) -> None:
+        """Record the chosen colour mode (no-op stand-in)."""
+        self.color_mode = mode
 
 
 def _make_session(
