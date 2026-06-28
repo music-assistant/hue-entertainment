@@ -8,18 +8,22 @@ bridge and the Hue Pro bridge. No openssl subprocess and no C bindings beyond th
 """
 
 from .api import HueEntertainmentAPI
+from .color import ColorMode, Gamut, gamut_for_type
 from .discovery import DiscoveredBridge, discover_bridges
 from .dtls import HueDtlsStreamer
 from .models import EntertainmentArea, LightChannel, LightColorCommand
 from .session import EntertainmentSession
 
 __all__ = [
+    "ColorMode",
     "DiscoveredBridge",
     "EntertainmentArea",
     "EntertainmentSession",
+    "Gamut",
     "HueDtlsStreamer",
     "HueEntertainmentAPI",
     "LightChannel",
     "LightColorCommand",
     "discover_bridges",
+    "gamut_for_type",
 ]

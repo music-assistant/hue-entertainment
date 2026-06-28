@@ -27,8 +27,10 @@ from contextlib import suppress
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from .color import GAMUT_C, ColorMode, Gamut, rgb_to_xy
 from .constants import (
     COLOR_SPACE_RGB,
+    COLOR_SPACE_XY,
     HUE_ENTERTAINMENT_PORT,
     HUESTREAM_HEADER,
     HUESTREAM_VERSION,
@@ -76,6 +78,8 @@ class HueDtlsStreamer:
         self._send_queue: queue.Queue[bytes | object] = queue.Queue(maxsize=64)
         self._sender_thread: threading.Thread | None = None
         self._last_message: bytes | None = None
+        self._color_mode: ColorMode = ColorMode.RGB
+        self._gamuts: dict[int, Gamut] = {}
 
     @property
     def is_connected(self) -> bool:
@@ -122,6 +126,18 @@ class HueDtlsStreamer:
         if self._sender_thread is not None:
             self._sender_thread.join(timeout=5.0)
             self._sender_thread = None
+
+    def set_color_mode(self, mode: ColorMode, gamuts: dict[int, Gamut] | None = None) -> None:
+        """
+        Choose how colours are encoded into the stream (see :class:`ColorMode`).
+
+        :param mode: ``RGB`` (raw, widest range), ``XY`` (gamut-accurate, consistent) or
+            ``VIVID`` (gamut, saturation stretched to the edge).
+        :param gamuts: Optional map of channel id to colour gamut for the xy modes; channels
+            without an entry fall back to the widest gamut (C).
+        """
+        self._color_mode = mode
+        self._gamuts = dict(gamuts) if gamuts else {}
 
     def send_colors(self, commands: list[LightColorCommand]) -> None:
         """Queue light color commands for sending (non-blocking, event-loop safe)."""
@@ -185,14 +201,15 @@ class HueDtlsStreamer:
         Build a HueStream v2 message for the Hue V2 bridge.
 
         Format: 16-byte header + 36-byte ASCII UUID + 7 bytes per channel.
-        Per-channel: channel_id(1) + R(2) + G(2) + B(2)
+        Per-channel: channel_id(1) + two 16-bit colour components (RGB, or xy + brightness
+        when gamut mapping is enabled).
         """
         header = bytearray()
         header.extend(HUESTREAM_HEADER)  # 9 bytes protocol name
         header.extend(HUESTREAM_VERSION)  # version 2.0
         header.append(self._sequence & 0xFF)  # sequence id
         header.extend(b"\x00\x00")  # reserved
-        header.append(COLOR_SPACE_RGB)  # color space (0x00 = RGB)
+        header.append(COLOR_SPACE_RGB if self._color_mode is ColorMode.RGB else COLOR_SPACE_XY)
         header.append(0x00)  # reserved
         self._sequence = (self._sequence + 1) & 0xFF
 
@@ -200,14 +217,30 @@ class HueDtlsStreamer:
         header.extend(self._area_uuid_bytes)
 
         for cmd in commands:
-            # Per-channel: channel_id(1) + R(1,1) + G(1,1) + B(1,1) = 7 bytes
-            # Color bytes are 0-255, each duplicated (Q42.HueApi convention)
-            r = min(255, cmd.red >> 8) if cmd.red > 255 else cmd.red
-            g = min(255, cmd.green >> 8) if cmd.green > 255 else cmd.green
-            b = min(255, cmd.blue >> 8) if cmd.blue > 255 else cmd.blue
-            header.extend(bytes([cmd.channel_id & 0xFF, r, r, g, g, b, b]))
+            header.extend(self._encode_channel(cmd))
 
         return bytes(header)
+
+    def _encode_channel(self, cmd: LightColorCommand) -> bytes:
+        """Encode one channel as 7 bytes: id + two big-endian 16-bit colour components."""
+        if self._color_mode is not ColorMode.RGB:
+            gamut = self._gamuts.get(cmd.channel_id, GAMUT_C)
+            x, y, bri = rgb_to_xy(
+                cmd.red / 65535,
+                cmd.green / 65535,
+                cmd.blue / 65535,
+                gamut,
+                vivid=self._color_mode is ColorMode.VIVID,
+            )
+            xi, yi, bi = round(x * 65535), round(y * 65535), round(bri * 65535)
+            return bytes(
+                [cmd.channel_id & 0xFF, xi >> 8, xi & 0xFF, yi >> 8, yi & 0xFF, bi >> 8, bi & 0xFF]
+            )
+        # RGB: 8-bit per channel duplicated into the 16-bit field (Q42.HueApi convention).
+        r = min(255, cmd.red >> 8) if cmd.red > 255 else cmd.red
+        g = min(255, cmd.green >> 8) if cmd.green > 255 else cmd.green
+        b = min(255, cmd.blue >> 8) if cmd.blue > 255 else cmd.blue
+        return bytes([cmd.channel_id & 0xFF, r, r, g, g, b, b])
 
 
 # ---------------------------------------------------------------------------
