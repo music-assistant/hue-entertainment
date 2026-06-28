@@ -40,6 +40,8 @@ LOGGER = logging.getLogger(__name__)
 
 _STOP = object()
 HANDSHAKE_TIMEOUT = 5.0
+# Extra cookie ClientHello sends when the bridge does not answer ServerHello promptly.
+_SERVER_HELLO_RESENDS = 2
 
 # DTLS constants
 _DTLS_VERSION = b"\xfe\xfd"  # DTLS 1.2
@@ -245,18 +247,12 @@ class _DtlsConnection:
         self._send_handshake(hello1, msg_type=_HT_CLIENT_HELLO)
 
         # Flight 2: HelloVerifyRequest
+        LOGGER.debug("DTLS handshake %s:%d awaiting HelloVerifyRequest", self._host, self._port)
         data = self._recv()
         cookie = self._parse_hello_verify_request(data)
 
-        # Flight 3: ClientHello (with cookie)
-        self._msg_seq = 0
-        self._send_seq = 0
-        self._handshake_messages = bytearray()
-        hello2 = self._build_client_hello(cookie=cookie)
-        self._send_handshake(hello2, msg_type=_HT_CLIENT_HELLO)
-
-        # Flight 4: ServerHello + ServerHelloDone
-        data = self._recv()
+        # Flight 3-4: cookie ClientHello → ServerHello (resend on timeout)
+        data = self._await_server_hello(cookie)
         self._parse_server_flight(data)
 
         # Derive keys from PSK
@@ -279,10 +275,61 @@ class _DtlsConnection:
         # Read and discard — we just need to confirm the server accepted. Some
         # bridges don't send the server Finished promptly, so a timeout is fine.
         self._sock.settimeout(3.0)
+        LOGGER.debug(
+            "DTLS handshake %s:%d awaiting server Finished (optional)",
+            self._host,
+            self._port,
+        )
         with suppress(TimeoutError):
             self._recv()  # ChangeCipherSpec
             self._recv()  # Finished (encrypted, we don't verify)
         self._sock.settimeout(5.0)
+
+    def _send_cookie_client_hello(self, cookie: bytes) -> None:
+        """Send flight 3: ClientHello with HelloVerify cookie."""
+        self._msg_seq = 0
+        self._send_seq = 0
+        self._handshake_messages = bytearray()
+        hello2 = self._build_client_hello(cookie=cookie)
+        self._send_handshake(hello2, msg_type=_HT_CLIENT_HELLO)
+
+    def _await_server_hello(self, cookie: bytes) -> bytes:
+        """
+        Wait for flight 4 (ServerHello). Resend cookie ClientHello on timeout.
+
+        :param cookie: Cookie from HelloVerifyRequest.
+        """
+        self._send_cookie_client_hello(cookie)
+        last_err: TimeoutError | None = None
+        tries = _SERVER_HELLO_RESENDS + 1
+        for attempt in range(tries):
+            LOGGER.debug(
+                "DTLS handshake %s:%d awaiting ServerHello (try %d/%d)",
+                self._host,
+                self._port,
+                attempt + 1,
+                tries,
+            )
+            try:
+                return self._recv()
+            except TimeoutError as err:
+                last_err = err
+                if attempt >= _SERVER_HELLO_RESENDS:
+                    break
+                LOGGER.warning(
+                    "DTLS handshake %s:%d ServerHello timeout, resending cookie ClientHello",
+                    self._host,
+                    self._port,
+                )
+                self._send_cookie_client_hello(cookie)
+        LOGGER.warning(
+            "DTLS handshake %s:%d timed out awaiting ServerHello after %d tries",
+            self._host,
+            self._port,
+            tries,
+        )
+        assert last_err is not None
+        raise last_err
 
     def send(self, plaintext: bytes) -> None:
         """Send encrypted application data."""
