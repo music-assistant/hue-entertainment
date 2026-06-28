@@ -12,7 +12,7 @@ from hue_entertainment.dtls import _SERVER_HELLO_RESENDS, _DtlsConnection
 def test_await_server_hello_resends_after_timeout() -> None:
     """A single ServerHello timeout triggers one cookie ClientHello resend."""
     conn = MagicMock(spec=_DtlsConnection)
-    conn._host = "10.0.110.4"
+    conn._host = "bridge.local"
     conn._port = 2100
     conn._recv = MagicMock(side_effect=[TimeoutError(), b"server-flight"])
     cookie = b"\x01\x02"
@@ -27,7 +27,7 @@ def test_await_server_hello_resends_after_timeout() -> None:
 def test_await_server_hello_raises_after_exhausted_resends() -> None:
     """All ServerHello attempts timing out re-raises the last TimeoutError."""
     conn = MagicMock(spec=_DtlsConnection)
-    conn._host = "10.0.110.4"
+    conn._host = "bridge.local"
     conn._port = 2100
     conn._recv = MagicMock(side_effect=TimeoutError())
 
