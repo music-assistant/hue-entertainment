@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .color import Gamut
+
 
 @dataclass
 class LightChannel:
@@ -13,6 +15,7 @@ class LightChannel:
     service_id: str
     name: str
     position: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    gamut: Gamut | None = None  # colour gamut of the channel's light, if known
 
 
 @dataclass

@@ -13,6 +13,7 @@ from typing import Any
 
 import aiohttp
 
+from .color import Gamut, gamut_for_type
 from .models import EntertainmentArea, LightChannel
 
 LOGGER = logging.getLogger(__name__)
@@ -107,10 +108,11 @@ class HueEntertainmentAPI:
         Fetch all entertainment configurations from the bridge.
 
         Each channel's ``name`` is resolved to the underlying light/device name where
-        possible (so callers can show real names rather than channel numbers).
+        possible (so callers can show real names rather than channel numbers), and its
+        ``gamut`` to the light's colour gamut.
         """
         result = await self._request("GET", "/clip/v2/resource/entertainment_configuration")
-        names = await self._resolve_service_names()
+        names, gamuts = await self._resolve_services()
         areas: list[EntertainmentArea] = []
 
         for config in _data(result):
@@ -137,6 +139,7 @@ class HueEntertainmentAPI:
                         service_id=service_id,
                         name=names.get(service_id) or f"Channel {ch_id}",
                         position=position,
+                        gamut=gamuts.get(service_id),
                     )
                 )
 
@@ -144,15 +147,16 @@ class HueEntertainmentAPI:
 
         return areas
 
-    async def _resolve_service_names(self) -> dict[str, str]:
-        """Map channel service rids (light or entertainment) to human-readable names."""
+    async def _resolve_services(self) -> tuple[dict[str, str], dict[str, Gamut]]:
+        """Map channel service rids (light or entertainment) to light names and colour gamuts."""
         names: dict[str, str] = {}
+        gamuts: dict[str, Gamut] = {}
         try:
             devices = await self._request("GET", "/clip/v2/resource/device")
             lights = await self._request("GET", "/clip/v2/resource/light")
             entertainments = await self._request("GET", "/clip/v2/resource/entertainment")
-        except Exception:  # noqa: BLE001 - names are a best-effort enrichment
-            return names
+        except Exception:  # noqa: BLE001 - names and gamuts are a best-effort enrichment
+            return names, gamuts
         device_names = {
             device.get("id", ""): device.get("metadata", {}).get("name", "")
             for device in _data(devices)
@@ -164,11 +168,16 @@ class HueEntertainmentAPI:
             )
             if label:
                 names[light.get("id", "")] = label
+            if (gamut := _parse_gamut(light.get("color"))) is not None:
+                gamuts[light.get("id", "")] = gamut
         for entertainment in _data(entertainments):
             owner = entertainment.get("owner", {}).get("rid", "")
             if device_names.get(owner):
                 names[entertainment.get("id", "")] = device_names[owner]
-        return names
+            light_rid = (entertainment.get("renderer_reference") or {}).get("rid", "")
+            if light_rid in gamuts:
+                gamuts[entertainment.get("id", "")] = gamuts[light_rid]
+        return names, gamuts
 
     async def start_entertainment(self, area_id: str) -> None:
         """Start entertainment mode for the given area."""
@@ -257,3 +266,19 @@ def _data(result: Any) -> list[Any]:
         inner = result.get("data", [])
         return inner if isinstance(inner, list) else []
     return []
+
+
+def _parse_gamut(color: Any) -> Gamut | None:
+    """Return a light's colour gamut from its CLIP v2 ``color`` object (None if it has none)."""
+    if not isinstance(color, dict):
+        return None
+    triangle: Any = color.get("gamut")
+    try:
+        return Gamut(
+            red=(triangle["red"]["x"], triangle["red"]["y"]),
+            green=(triangle["green"]["x"], triangle["green"]["y"]),
+            blue=(triangle["blue"]["x"], triangle["blue"]["y"]),
+        )
+    except (KeyError, TypeError):
+        # Some lights report no gamut triangle, only (at most) a gamut type.
+        return gamut_for_type(color.get("gamut_type"))
