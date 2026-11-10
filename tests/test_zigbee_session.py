@@ -112,8 +112,12 @@ async def make_session(ziggurat: FakeZiggurat) -> AsyncIterator[SessionFactory]:
     """Build sessions against the fake server and close them after the test."""
     sessions: list[ZigbeeEntertainmentSession] = []
 
-    def factory(lights: list[ZigbeeLight], idle_timeout: float = 0.0) -> ZigbeeEntertainmentSession:
-        session = ZigbeeEntertainmentSession(ziggurat.url, lights, idle_timeout=idle_timeout)
+    def factory(
+        lights: list[ZigbeeLight], idle_timeout: float = 0.0, max_rate_hz: float = 25.0
+    ) -> ZigbeeEntertainmentSession:
+        session = ZigbeeEntertainmentSession(
+            ziggurat.url, lights, idle_timeout=idle_timeout, max_rate_hz=max_rate_hz
+        )
         sessions.append(session)
         return session
 
@@ -219,12 +223,11 @@ async def test_frame_rate_is_capped(ziggurat: FakeZiggurat, make_session: Sessio
 
 
 async def test_commands_during_pacing_are_not_sent_twice(
-    ziggurat: FakeZiggurat, make_session: SessionFactory, monkeypatch: pytest.MonkeyPatch
+    ziggurat: FakeZiggurat, make_session: SessionFactory
 ) -> None:
     """Commands that arrive while a frame waits for its slot go out once, in that frame."""
-    monkeypatch.setattr(zigbee_session, "_MIN_FRAME_INTERVAL_S", 0.15)
     a = ziggurat.add_light(_hue_light(0x3201, "00:17:88:01:00:00:00:33"))
-    session = make_session([_zigbee_light(a, 0)])
+    session = make_session([_zigbee_light(a, 0)], max_rate_hz=1 / 0.15)
     await session.start()
     session.send([RED])
     assert await wait_until(lambda: len(ziggurat.frames) == 1)
@@ -237,6 +240,29 @@ async def test_commands_during_pacing_are_not_sent_twice(
         _record(a.nwk, RED),
         _record(a.nwk, blue),
     ]
+
+
+async def test_low_rate_session_sends_slowly_and_fades_over_the_gap(
+    ziggurat: FakeZiggurat, make_session: SessionFactory
+) -> None:
+    """With max_rate_hz=5 frames stay 200 ms apart and the lights fade over those 200 ms."""
+    a = ziggurat.add_light(_hue_light(0x3301, "00:17:88:01:00:00:00:34"))
+    session = make_session([_zigbee_light(a, 0)], max_rate_hz=5)
+    await session.start()
+    for red in range(40):
+        session.send([LightColorCommand(0, red=red * 1000)])
+        await asyncio.sleep(0.02)
+    starts = [frame.at for frame in ziggurat.frames]
+    assert 3 <= len(starts) <= 6
+    assert min(b - a for a, b in itertools.pairwise(starts)) >= 0.19
+    assert abs(_frame_fields(ziggurat.frames[-1])[1] - smoothing_from_seconds(0.2)) < 5
+
+
+def test_rejects_a_non_positive_rate() -> None:
+    """The rate cap must be positive."""
+    light = ZigbeeLight(0, "00:00:00:00:00:00:00:01", 1)
+    with pytest.raises(ValueError, match="max_rate_hz"):
+        ZigbeeEntertainmentSession("ws://127.0.0.1:1/", [light], max_rate_hz=0)
 
 
 async def test_keepalive_resends_last_frame(

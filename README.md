@@ -121,8 +121,8 @@ await session.stop()  # restores the captured state
 ```
 
 - Up to 10 Hue lights per session, within radio range of each other; the best-heard light is the proxy.
-- Frames go out at up to 25 Hz (the Hue bridge's own rate); when the network is busy the newest
-  frame wins.
+- Frames go out at up to 25 Hz (the Hue bridge's own rate), or `max_rate_hz`; the lights fade over
+  the time between frames, and when the network is busy the newest frame wins.
 - The client can only send unicast frames, at background priority so ZHA's traffic always goes
   first; it never reconfigures the stack or the network.
 - When the stream is lost (ZHA restarts the stack, the connection drops, frames stop arriving),
@@ -140,7 +140,7 @@ await session.stop()  # restores the captured state
   recommended high-level facade: on-demand `start(area_id)`, non-blocking `send(...)`,
   `stop()` / `aclose()`, automatic idle teardown, and enforcement of the bridge's
   single-active-stream constraint. The blocking DTLS work runs in an executor for you.
-- **`ZigbeeEntertainmentSession(url, lights, *, idle_timeout=10.0)`** — the Zigbee transport:
+- **`ZigbeeEntertainmentSession(url, lights, *, idle_timeout=10.0, max_rate_hz=25.0)`** — the Zigbee transport:
   `start()`, non-blocking `send(...)`, `stop()` / `aclose()`, `is_streaming`; raises
   `ZigguratError` when ziggurat-server is unreachable or its Zigbee stack is down.
 - **Models** — `EntertainmentArea`, `LightChannel`, `LightColorCommand`, `ZigbeeLight`.
