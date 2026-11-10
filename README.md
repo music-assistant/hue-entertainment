@@ -156,8 +156,9 @@ await session.stop()  # restores the captured state
   `stop()` / `aclose()`, automatic idle teardown, and enforcement of the bridge's
   single-active-stream constraint. The blocking DTLS work runs in an executor for you.
 - **`ZigbeeEntertainmentSession(url, lights, *, idle_timeout=10.0, max_rate_hz=25.0)`** — the Zigbee transport:
-  `start()`, non-blocking `send(...)`, `stop()` / `aclose()`, `is_streaming`; raises
-  `ZigguratError` when ziggurat-server is unreachable or its Zigbee stack is down.
+  `start()`, non-blocking `send(...)`, `stop()` / `aclose()`, `is_streaming`, and `max_rate_hz`
+  (can be changed while streaming, without a restart); raises `ZigguratError` when
+  ziggurat-server is unreachable or its Zigbee stack is down.
 - **`hue_entertainment.zigbee.read_segment_counts(url, nwks)`** — the gradient segment count per
   light (1 for a light without segments; lights that do not answer are left out).
 - **Models** — `EntertainmentArea`, `LightChannel`, `LightColorCommand`, `ZigbeeLight`.
