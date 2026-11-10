@@ -5,6 +5,10 @@ categories:
   - title: "⚠ Breaking Changes"
     labels:
       - "breaking-change"
+  - title: "🚀 Features and enhancements"
+    labels:
+      - "new-feature"
+      - "enhancement"
   - title: "⬆️ Dependencies"
     collapse-after: 1
     labels:
