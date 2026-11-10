@@ -25,11 +25,12 @@ SEND_SUCCESS = 0
 SEND_NWK_NO_ACK = 4
 SEND_APS_ACK_TIMEOUT = 7
 UNSUPPORTED_ATTRIBUTE = 0x86
+UNSUPPORTED_MANUFACTURER_COMMAND = 0x83
 
 
 @dataclass
 class FakeLight:
-    """A simulated light: answers attribute reads/writes when online."""
+    """A simulated light: answers attribute reads/writes and segment commands when online."""
 
     nwk: int
     ieee: str
@@ -37,6 +38,11 @@ class FakeLight:
     online: bool = True
     # (cluster, attribute) -> (ZCL data type, value)
     attributes: dict[tuple[int, int], tuple[int, int]] = field(default_factory=dict)
+    # Gradient segment count; None refuses the segment commands like a light without segments.
+    segments: int | None = None
+    answers_segments: bool = True
+    map_status: int = 0  # status the segment map response reports; 0 accepts the map
+    segment_map: list[int] | None = None  # the addresses of the last accepted segment map
 
 
 @dataclass
@@ -65,6 +71,15 @@ class Unicast:
     def is_frame(self) -> bool:
         """Return True for an entertainment frame (0xFC01 command 0x01)."""
         return self.cluster == CLUSTER_ENTERTAINMENT and self.zcl.command == 0x01
+
+    @property
+    def is_segment_command(self) -> bool:
+        """Return True for a segment layout (0xFC01 0x04) or segment map (0x07) request."""
+        return (
+            self.cluster == CLUSTER_ENTERTAINMENT
+            and self.zcl.cluster_specific
+            and self.zcl.command in (0x04, 0x07)
+        )
 
     @property
     def is_reset(self) -> bool:
@@ -256,8 +271,10 @@ def _header(command: int, frame_type: int, rid: int) -> bytes:
 
 
 def _reply(light: FakeLight, req: Unicast) -> bytes | None:
-    """Answer a global Read/Write Attributes request like a light would."""
+    """Answer a global Read/Write Attributes or a segment request like a light would."""
     header, payload = parse_zcl(req.asdu)
+    if req.is_segment_command:
+        return _segment_reply(light, header, payload)
     if header.cluster_specific:
         return None
     mfr = header.manufacturer is not None
@@ -283,3 +300,22 @@ def _reply(light: FakeLight, req: Unicast) -> bytes | None:
         light.attributes[(req.cluster, attribute)] = (data_type, raw)
         return prefix + bytes([0x04, 0x00])
     return None
+
+
+def _segment_reply(light: FakeLight, header: ZclHeader, payload: bytes) -> bytes | None:
+    """Answer a segment layout or segment map request like a (gradient) light would."""
+    if not light.answers_segments:
+        return None
+    if light.segments is None:
+        default_response = struct.pack("<BHBB", 0x1C, header.manufacturer, header.tsn, 0x0B)
+        return default_response + bytes([header.command, UNSUPPORTED_MANUFACTURER_COMMAND])
+    prefix = struct.pack("<BHBB", 0x1D, header.manufacturer, header.tsn, header.command)
+    if header.command == 0x04:
+        layout = b"".join(bytes([segment, 1]) for segment in range(light.segments))
+        return prefix + bytes([0x00, 0x00, light.segments]) + layout
+    (count,) = struct.unpack_from(">H", payload)
+    addresses = [address for (address,) in struct.iter_unpack("<H", payload[2:])]
+    assert count == len(addresses)
+    if light.map_status == 0:
+        light.segment_map = addresses
+    return prefix + struct.pack("<H", light.map_status)

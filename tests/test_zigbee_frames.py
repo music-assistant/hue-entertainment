@@ -13,10 +13,16 @@ from hue_entertainment.zigbee.frames import (
     move_to_color_temperature,
     move_to_level_with_on_off,
     off,
+    parse_default_response,
     parse_read_attributes_response,
+    parse_segment_layout,
+    parse_segment_map_response,
     parse_zcl,
     quantize_xy,
     read_attributes,
+    segment_layout_request,
+    segment_map,
+    segment_record,
     smoothing_from_seconds,
     write_attribute_uint8,
 )
@@ -53,6 +59,13 @@ def test_quantize_xy_clamps(x: float, y: float, expected: str) -> None:
     assert quantize_xy(x, y).hex() == expected
 
 
+def test_segment_record_uses_segment_mode() -> None:
+    """A segment record differs from a device record only in its mode bits (00000)."""
+    x, y = _xy_for(0xBAA, 0xCCB)
+    assert segment_record(0x1122, 0x7FF, x, y).hex() == "2211e0ffaabbcc"
+    assert segment_record(0x1122, 0, x, y)[2:4] == (1 << 5).to_bytes(2, "little")
+
+
 def test_light_record_brightness_is_clamped() -> None:
     """Brightness stays within 1..2047: zero would not be a valid record."""
     assert light_record(0x0001, 0, 0.3, 0.3)[2:4] == (1 << 5 | 0b01011).to_bytes(2, "little")
@@ -75,6 +88,47 @@ def test_entertainment_frame_rejects_too_many_records() -> None:
 def test_entertainment_reset_layout() -> None:
     """The reset carries 00 01 and the stream counter."""
     assert entertainment_reset(0x07, 0x1122).hex() == "150b100703" + "0001" + "22110000"
+
+
+def test_segment_layout_request() -> None:
+    """The layout request is mfr-specific cluster command 0x04 with payload 00."""
+    assert segment_layout_request(0x42).hex() == "150b104204" + "00"
+
+
+def test_parse_segment_layout_real_sample() -> None:
+    """The answer of a Signe table lamp: 4 segments of length 1."""
+    payload = bytes.fromhex("00 00 04 00 01 01 01 02 01 03 01")
+    assert parse_segment_layout(payload) == [(0, 1), (1, 1), (2, 1), (3, 1)]
+
+
+@pytest.mark.parametrize("data", ["", "0000", "000002000101"])
+def test_parse_segment_layout_rejects_truncated(data: str) -> None:
+    """A payload shorter than its segment count raises ValueError."""
+    with pytest.raises(ValueError, match="too short"):
+        parse_segment_layout(bytes.fromhex(data))
+
+
+def test_segment_map_matches_probe() -> None:
+    """Count is big-endian, the addresses little-endian (bytes sent to a Signe lamp)."""
+    addresses = [0xD297, 0xD298, 0xD299, 0xD29A, 0xD29B, 0xD29C, 0xD29D]
+    assert segment_map(0x42, addresses) == bytes.fromhex(
+        "15 0b 10 42 07 00 07 97 d2 98 d2 99 d2 9a d2 9b d2 9c d2 9d d2"
+    )
+
+
+@pytest.mark.parametrize(
+    ("data", "accepted"), [("0000", True), ("0100", False), ("0001", False), ("", False)]
+)
+def test_parse_segment_map_response(data: str, *, accepted: bool) -> None:
+    """Only a 00 00 status accepts the map."""
+    assert parse_segment_map_response(bytes.fromhex(data)) is accepted
+
+
+def test_parse_default_response() -> None:
+    """A Default Response carries the answered command id and its status."""
+    assert parse_default_response(bytes.fromhex("0483")) == (0x04, 0x83)
+    with pytest.raises(ValueError, match="too short"):
+        parse_default_response(b"\x04")
 
 
 @pytest.mark.parametrize(

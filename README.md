@@ -120,9 +120,22 @@ session.send([LightColorCommand(channel_id=0, red=65535), LightColorCommand(chan
 await session.stop()  # restores the captured state
 ```
 
-- Up to 10 Hue lights per session, within radio range of each other; the best-heard light is the proxy.
+- Hue lights within radio range of each other; the best-heard light is the proxy.
 - Frames go out at up to 25 Hz (the Hue bridge's own rate), or `max_rate_hz`; the lights fade over
-  the time between frames, and when the network is busy the newest frame wins.
+  the time between frames, and when the network is busy the newest frame wins. A frame holds 10
+  channels, so an update to more channels goes out as several frames, back to back.
+- Gradient lights (Signe, gradient lightstrips) can show several zones: one entry per zone with the
+  light's `ieee` and `nwk` and `zone=0..n-1`, zone 0 at the first segment (the bottom of a Signe).
+  The segments are spread evenly over the zones; a light without segments streams the colour of
+  its zone 0. `read_segment_counts(url, nwks)` tells beforehand which lights are gradients:
+
+  ```python
+  lights = [
+      ZigbeeLight(channel_id=0, ieee="00:17:88:01:0c:bf:17:c8", nwk=0x1A2B, name="Signe", zone=0),
+      ZigbeeLight(channel_id=1, ieee="00:17:88:01:0c:bf:17:c8", nwk=0x1A2B, name="Signe", zone=1),
+      ZigbeeLight(channel_id=2, ieee="00:17:88:01:0c:bf:17:c8", nwk=0x1A2B, name="Signe", zone=2),
+  ]
+  ```
 - The client can only send unicast frames, at background priority so ZHA's traffic always goes
   first; it never reconfigures the stack or the network.
 - When the stream is lost (ZHA restarts the stack, the connection drops, frames stop arriving),
@@ -143,6 +156,8 @@ await session.stop()  # restores the captured state
 - **`ZigbeeEntertainmentSession(url, lights, *, idle_timeout=10.0, max_rate_hz=25.0)`** — the Zigbee transport:
   `start()`, non-blocking `send(...)`, `stop()` / `aclose()`, `is_streaming`; raises
   `ZigguratError` when ziggurat-server is unreachable or its Zigbee stack is down.
+- **`hue_entertainment.zigbee.read_segment_counts(url, nwks)`** — the gradient segment count per
+  light (1 for a light without segments; lights that do not answer are left out).
 - **Models** — `EntertainmentArea`, `LightChannel`, `LightColorCommand`, `ZigbeeLight`.
 
 `LightColorCommand` carries 16-bit RGB; in the default RGB mode the encoder emits the

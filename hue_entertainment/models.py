@@ -46,9 +46,13 @@ class ZigbeeLight:
     :param ieee: IEEE address, e.g. ``"00:17:88:01:0c:bf:17:c8"``.
     :param nwk: Current network (short) address.
     :param name: Display name, used in logs.
+    :param zone: Zone of a gradient light, numbered from its first segment (the bottom of a
+        Signe lamp). Entries sharing an ``ieee`` are the zones 0 to n-1 of one light; a light
+        with a single entry streams one colour.
     """
 
     channel_id: int
     ieee: str
     nwk: int
     name: str = ""
+    zone: int = 0
