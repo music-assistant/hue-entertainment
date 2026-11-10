@@ -6,7 +6,7 @@ import uuid
 
 import pytest
 
-from hue_entertainment.color import ColorMode
+from hue_entertainment.color import GAMUT_A, GAMUT_B, GAMUT_C, ColorMode
 from hue_entertainment.constants import (
     COLOR_SPACE_RGB,
     COLOR_SPACE_XY,
@@ -98,6 +98,41 @@ class TestHueStreamMessage:
         streamer.set_color_mode(ColorMode.VIVID)
         vivid = streamer._build_huestream_message([cmd])[FULL_HEADER_SIZE:]
         assert (vivid[1] << 8 | vivid[2]) > (xy[1] << 8 | xy[2])
+
+    def test_xy_channel_bytes_for_mid_value_colour(self, streamer: HueDtlsStreamer) -> None:
+        """XY mode encodes x, y and brightness as big-endian 16-bit fractions of 65535."""
+        # sRGB (0.5, 0.25, 0.0) -> xy (0.53616, 0.41246) per IEC 61966-2-1; brightness 0.5.
+        cmd = LightColorCommand(channel_id=3, red=32768, green=16384, blue=0)
+        streamer.set_color_mode(ColorMode.XY)
+        channel = streamer._build_huestream_message([cmd])[FULL_HEADER_SIZE:]
+        assert channel[0] == 3
+        x = int.from_bytes(channel[1:3], "big") / 65535
+        y = int.from_bytes(channel[3:5], "big") / 65535
+        assert x == pytest.approx(0.53616, abs=1e-4)
+        assert y == pytest.approx(0.41246, abs=1e-4)
+        assert channel[5:7] == bytes([0x80, 0x00])  # round(32768 / 65535 * 65535)
+
+    def test_xy_modes_use_per_channel_gamut(self, streamer: HueDtlsStreamer) -> None:
+        """Each channel is mapped into its own gamut; channels without one use gamut C."""
+
+        def channel_xy(msg: bytes, index: int) -> tuple[float, float]:
+            offset = FULL_HEADER_SIZE + index * CHANNEL_SIZE
+            x = int.from_bytes(msg[offset + 1 : offset + 3], "big") / 65535
+            y = int.from_bytes(msg[offset + 3 : offset + 5], "big") / 65535
+            return (x, y)
+
+        red = [LightColorCommand(channel_id=ch, red=65535) for ch in (0, 1)]
+        streamer.set_color_mode(ColorMode.VIVID, {0: GAMUT_A})
+        msg = streamer._build_huestream_message(red)
+        assert channel_xy(msg, 0) == pytest.approx(GAMUT_A.red, abs=1e-4)
+        assert channel_xy(msg, 1) == pytest.approx(GAMUT_C.red, abs=1e-4)
+
+        # sRGB green lies outside gamut B, so XY mode clamps it there but not in gamut C.
+        green = [LightColorCommand(channel_id=ch, green=65535) for ch in (0, 1)]
+        streamer.set_color_mode(ColorMode.XY, {0: GAMUT_B})
+        msg = streamer._build_huestream_message(green)
+        assert channel_xy(msg, 0)[0] > 0.33
+        assert channel_xy(msg, 1) == pytest.approx((0.30, 0.60), abs=1e-3)
 
     def test_single_channel_message(self, streamer: HueDtlsStreamer) -> None:
         """Test message with a single light channel (duplicated-byte color format)."""

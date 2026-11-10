@@ -9,7 +9,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from hue_entertainment import EntertainmentSession
-from hue_entertainment.models import EntertainmentArea, LightColorCommand
+from hue_entertainment.color import GAMUT_A, ColorMode
+from hue_entertainment.models import EntertainmentArea, LightChannel, LightColorCommand
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -25,6 +26,7 @@ class _FakeStreamer:
         self.sent: list[list[LightColorCommand]] = []
         self.fail_connect = False
         self.color_mode: object = None
+        self.gamuts: object = None
 
     @property
     def is_connected(self) -> bool:
@@ -48,9 +50,10 @@ class _FakeStreamer:
         if self.connected:
             self.sent.append(commands)
 
-    def set_color_mode(self, mode: object, _gamuts: object = None) -> None:
-        """Record the chosen colour mode (no-op stand-in)."""
+    def set_color_mode(self, mode: object, gamuts: object = None) -> None:
+        """Record the chosen colour mode and channel gamuts (no-op stand-in)."""
         self.color_mode = mode
+        self.gamuts = gamuts
 
 
 def _make_session(
@@ -58,9 +61,12 @@ def _make_session(
     *,
     idle_timeout: float = 0.0,
     areas: list[EntertainmentArea] | None = None,
+    color_mode: ColorMode = ColorMode.RGB,
 ) -> tuple[EntertainmentSession, AsyncMock]:
     """Build a session with its API and streamer replaced by fakes."""
-    session = EntertainmentSession("1.2.3.4", "user", "deadbeef", idle_timeout=idle_timeout)
+    session = EntertainmentSession(
+        "1.2.3.4", "user", "deadbeef", idle_timeout=idle_timeout, color_mode=color_mode
+    )
     api = AsyncMock()
     api.host = "1.2.3.4"
     api.get_entertainment_areas.return_value = areas or []
@@ -160,6 +166,36 @@ async def test_stop_others_keeps_target_area() -> None:
     api.stop_entertainment.assert_any_await("other")
     stopped = [call.args[0] for call in api.stop_entertainment.await_args_list]
     assert "area-1" not in stopped
+
+
+@pytest.mark.parametrize("stop_others", [True, False])
+async def test_start_passes_channel_gamuts_in_xy_mode(stop_others: bool) -> None:
+    """In an xy mode start() hands the streamer the area's known channel gamuts (one lookup)."""
+    streamer = _FakeStreamer()
+    areas = [
+        EntertainmentArea(
+            id="area-1",
+            name="TV",
+            channels=[
+                LightChannel(channel_id=0, service_id="ent-0", name="Left", gamut=GAMUT_A),
+                LightChannel(channel_id=1, service_id="ent-1", name="Right"),
+            ],
+        ),
+    ]
+    session, api = _make_session(streamer, areas=areas, color_mode=ColorMode.VIVID)
+    await session.start("area-1", stop_others=stop_others)
+    api.get_entertainment_areas.assert_awaited_once()
+    assert streamer.color_mode is ColorMode.VIVID
+    assert streamer.gamuts == {0: GAMUT_A}
+
+
+async def test_start_in_rgb_mode_skips_area_lookup_without_stop_others() -> None:
+    """RGB mode needs no gamuts, so start() only looks up areas to stop the others."""
+    streamer = _FakeStreamer()
+    session, api = _make_session(streamer)
+    await session.start("area-1", stop_others=False)
+    api.get_entertainment_areas.assert_not_awaited()
+    assert streamer.color_mode is ColorMode.RGB
 
 
 async def test_idle_timeout_tears_down() -> None:

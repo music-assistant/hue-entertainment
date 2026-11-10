@@ -131,8 +131,8 @@ class HueDtlsStreamer:
         """
         Choose how colours are encoded into the stream (see :class:`ColorMode`).
 
-        :param mode: ``RGB`` (raw, widest range), ``XY`` (gamut-accurate, consistent) or
-            ``VIVID`` (gamut, saturation stretched to the edge).
+        :param mode: ``RGB`` (raw, widest range), ``XY`` (colour-accurate, consistent) or
+            ``VIVID`` (mapped onto each light's own gamut).
         :param gamuts: Optional map of channel id to colour gamut for the xy modes; channels
             without an entry fall back to the widest gamut (C).
         """
@@ -201,8 +201,8 @@ class HueDtlsStreamer:
         Build a HueStream v2 message for the Hue V2 bridge.
 
         Format: 16-byte header + 36-byte ASCII UUID + 7 bytes per channel.
-        Per-channel: channel_id(1) + two 16-bit colour components (RGB, or xy + brightness
-        when gamut mapping is enabled).
+        Per-channel: channel_id(1) + three 16-bit colour components (R, G, B, or x, y,
+        brightness in the xy colour modes).
         """
         header = bytearray()
         header.extend(HUESTREAM_HEADER)  # 9 bytes protocol name
@@ -222,7 +222,7 @@ class HueDtlsStreamer:
         return bytes(header)
 
     def _encode_channel(self, cmd: LightColorCommand) -> bytes:
-        """Encode one channel as 7 bytes: id + two big-endian 16-bit colour components."""
+        """Encode one channel as 7 bytes: id + three big-endian 16-bit colour components."""
         if self._color_mode is not ColorMode.RGB:
             gamut = self._gamuts.get(cmd.channel_id, GAMUT_C)
             x, y, bri = rgb_to_xy(

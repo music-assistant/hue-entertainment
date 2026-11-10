@@ -8,7 +8,7 @@ import time
 from contextlib import suppress
 
 from .api import HueEntertainmentAPI
-from .color import ColorMode
+from .color import ColorMode, Gamut
 from .dtls import HueDtlsStreamer
 from .models import EntertainmentArea, LightColorCommand
 
@@ -45,7 +45,8 @@ class EntertainmentSession:
         :param client_key: The hex client key from pairing, used as the DTLS pre-shared key.
         :param idle_timeout: Seconds of inactivity after which the stream is torn down; 0 disables.
         :param color_mode: How colours are encoded - raw ``RGB`` (default, widest range),
-            gamut-accurate ``XY``, or punchy ``VIVID``; see :class:`.ColorMode`.
+            colour-accurate ``XY``, or ``VIVID`` (mapped onto each light's own gamut); see
+            :class:`.ColorMode`. The xy modes use each channel's light gamut.
         """
         self._api = HueEntertainmentAPI(host, app_key)
         self._streamer = HueDtlsStreamer()
@@ -109,8 +110,13 @@ class EntertainmentSession:
             if self._streamer.is_connected and self._area_id == area_id:
                 return
             await self._teardown_locked()
+            areas: list[EntertainmentArea] = []
+            if stop_others or self._color_mode is not ColorMode.RGB:
+                with suppress(Exception):
+                    areas = await self._api.get_entertainment_areas()
             if stop_others:
-                await self._stop_other_areas(area_id)
+                await self._stop_other_areas(areas, area_id)
+            self._streamer.set_color_mode(self._color_mode, _channel_gamuts(areas, area_id))
 
             await self._api.start_entertainment(area_id)
             loop = asyncio.get_running_loop()
@@ -128,9 +134,6 @@ class EntertainmentSession:
                 raise
 
             self._area_id = area_id
-            # Per-light gamut data is not yet discovered, so the xy modes use the widest
-            # gamut (C) for every channel.
-            self._streamer.set_color_mode(self._color_mode)
             self._last_send = time.monotonic()
             if self._idle_timeout > 0:
                 self._idle_task = asyncio.create_task(self._idle_monitor())
@@ -175,10 +178,10 @@ class EntertainmentSession:
             await self._api.stop_entertainment(self._area_id)
             self._area_id = None
 
-    async def _stop_other_areas(self, keep: str) -> None:
+    async def _stop_other_areas(self, areas: list[EntertainmentArea], keep: str) -> None:
         """Stop any other (possibly orphaned) entertainment configuration on the bridge."""
         with suppress(Exception):
-            for area in await self._api.get_entertainment_areas():
+            for area in areas:
                 if area.id and area.id != keep:
                     await self._api.stop_entertainment(area.id)
 
@@ -196,3 +199,11 @@ class EntertainmentSession:
                 LOGGER.debug("Entertainment session idle for %.1fs - stopping", self._idle_timeout)
                 await self._teardown_locked()
                 return
+
+
+def _channel_gamuts(areas: list[EntertainmentArea], area_id: str) -> dict[int, Gamut]:
+    """Return the known light gamut per channel id of entertainment area ``area_id``."""
+    for area in areas:
+        if area.id == area_id:
+            return {ch.channel_id: ch.gamut for ch in area.channels if ch.gamut is not None}
+    return {}

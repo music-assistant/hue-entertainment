@@ -2,14 +2,13 @@
 CIE xy colour-gamut mapping for Hue Entertainment streaming.
 
 A Hue Entertainment stream can carry colour either as raw RGB (``COLOR_SPACE_RGB``)
-or as CIE xy chromaticity + brightness (``COLOR_SPACE_XY``). The bridge does not
-gamut-correct an entertainment stream, so a client that wants accurate, consistent
-colour across different Hue light models should convert RGB into the light's own
-colour gamut here before streaming.
+or as CIE xy chromaticity + brightness (``COLOR_SPACE_XY``). This module converts RGB
+into a light's own colour gamut for the xy colour space.
 
 Pure functions, no I/O. The maths is the standard sRGB companding + sRGB -> CIE XYZ
 (D65) linear transform, followed by a point-to-triangle projection onto the light's
-gamut. These are public colour-science formulas (IEC 61966-2-1 / CIE 1931); the
+gamut, or (vivid) an RGB -> XYZ transform built from the light's own primaries and D65
+white. These are public colour-science formulas (IEC 61966-2-1 / CIE 1931); the
 per-model gamut triangles are the documented Hue gamut A/B/C primaries.
 """
 
@@ -17,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from functools import cache
 from typing import Final
 
 # A 2D CIE xy point.
@@ -28,13 +28,14 @@ class ColorMode(StrEnum):
     How a client's RGB colours are encoded into the Hue Entertainment stream.
 
     - ``RGB``: send raw RGB. The bridge maps it to each bulb's full native gamut, giving the
-      widest colour range and the most dynamic, organic fades - but the same RGB can look
-      slightly different across mixed Hue models. Best for vivid, expressive light shows.
+      widest colour range - but the same RGB can look slightly different across mixed Hue
+      models. Best for vivid, expressive light shows.
     - ``XY``: convert to the bulb's CIE xy gamut (colour-accurate). Hardware-independent, so
-      colour is consistent across mixed models, at a narrower range and with steadier (less
-      organic) fades. Best when exact, matching colour across different lights matters.
-    - ``VIVID``: like ``XY`` but saturated colours are stretched to the gamut edge, recovering
-      most of RGB's punch while keeping cross-model consistency.
+      colour is consistent across mixed models, at a narrower range. Best when exact,
+      matching colour across different lights matters.
+    - ``VIVID``: map RGB onto the bulb's own gamut (primaries on the gamut corners, white on
+      D65), keeping the full saturation range of each light instead of sRGB accuracy. Gamut B
+      bulbs, whose gamut excludes D65, get ``XY``.
     """
 
     RGB = "rgb"
@@ -65,7 +66,7 @@ GAMUT_C: Final[Gamut] = Gamut(red=(0.692, 0.308), green=(0.17, 0.7), blue=(0.153
 
 _GAMUTS: Final[dict[str, Gamut]] = {"A": GAMUT_A, "B": GAMUT_B, "C": GAMUT_C}
 
-# CIE D65 white point - the neutral anchor that saturated colours are stretched away from.
+# CIE D65 white point - where vivid mode maps RGB white.
 _WHITE_D65: Final[Point] = (0.3127, 0.3290)
 
 
@@ -84,14 +85,15 @@ def rgb_to_xy(
     red: float, green: float, blue: float, gamut: Gamut = GAMUT_C, *, vivid: bool = False
 ) -> tuple[float, float, float]:
     """
-    Convert an sRGB colour to a gamut-clamped CIE xy chromaticity + brightness.
+    Convert an sRGB colour to a CIE xy chromaticity inside the light's gamut + brightness.
 
     :param red: Red channel, 0.0-1.0.
     :param green: Green channel, 0.0-1.0.
     :param blue: Blue channel, 0.0-1.0.
-    :param gamut: The target light's colour gamut; out-of-gamut colours are clamped to it.
-    :param vivid: Stretch saturated colours out to the gamut edge (the light's most saturated
-        rendering of that hue) instead of the colour-accurate sRGB point, for a punchier show.
+    :param gamut: The target light's colour gamut; the result always lies inside it.
+    :param vivid: Map RGB onto the light's own gamut (primaries on the gamut corners, white
+        on D65) instead of the colour-accurate sRGB chromaticity clamped to the gamut. A gamut
+        that does not contain D65 (gamut B) gets the colour-accurate result.
     :return: ``(x, y, brightness)`` with x/y in 0.0-1.0 chromaticity and brightness 0.0-1.0.
     """
     rr = max(0.0, min(1.0, red))
@@ -101,46 +103,51 @@ def rgb_to_xy(
     g = _gamma(gg)
     b = _gamma(bb)
 
-    # Linear sRGB -> CIE XYZ (D65); used only for the chromaticity (xy).
-    x_val = r * 0.4124 + g * 0.3576 + b * 0.1805
-    y_val = r * 0.2126 + g * 0.7152 + b * 0.0722
-    z_val = r * 0.0193 + g * 0.1192 + b * 0.9505
-
     # Brightness is the colour's value (max channel), NOT its luminance Y: saturated reds
     # and blues have very low Y, so using Y would dim vivid colours - max keeps full punch.
     brightness = max(rr, gg, bb)
 
-    total = x_val + y_val + z_val
-    if total <= 0.0:
-        # Pure black: park chromaticity at the gamut centre (brightness carries the result).
-        cx = (gamut.red[0] + gamut.green[0] + gamut.blue[0]) / 3.0
-        cy = (gamut.red[1] + gamut.green[1] + gamut.blue[1]) / 3.0
-        return (cx, cy, brightness)
+    if vivid and (weights := _primary_weights(gamut)) is not None:
+        # Mix the light's own primaries in linear-RGB proportions; always inside the gamut.
+        wr, wg, wb = r * weights[0], g * weights[1], b * weights[2]
+        total = wr + wg + wb
+        if total > 0.0:
+            cx = (wr * gamut.red[0] + wg * gamut.green[0] + wb * gamut.blue[0]) / total
+            cy = (wr * gamut.red[1] + wg * gamut.green[1] + wb * gamut.blue[1]) / total
+            return (cx, cy, brightness)
+    else:
+        # Linear sRGB -> CIE XYZ (D65); used only for the chromaticity (xy).
+        x_val = r * 0.4124 + g * 0.3576 + b * 0.1805
+        y_val = r * 0.2126 + g * 0.7152 + b * 0.0722
+        z_val = r * 0.0193 + g * 0.1192 + b * 0.9505
+        total = x_val + y_val + z_val
+        if total > 0.0:
+            cx, cy = _clamp_to_gamut((x_val / total, y_val / total), gamut)
+            return (cx, cy, brightness)
 
-    point = (x_val / total, y_val / total)
-    cx, cy = _clamp_to_gamut(point, gamut)
-    if vivid:
-        cx, cy = _saturate_to_edge((cx, cy), gamut, max(rr, gg, bb), min(rr, gg, bb))
+    # Pure black: park chromaticity at the gamut centre (brightness carries the result).
+    cx = (gamut.red[0] + gamut.green[0] + gamut.blue[0]) / 3.0
+    cy = (gamut.red[1] + gamut.green[1] + gamut.blue[1]) / 3.0
     return (cx, cy, brightness)
 
 
 # -- internals --
 
 
-def _saturate_to_edge(point: Point, gamut: Gamut, mx: float, mn: float) -> Point:
-    """
-    Push a chromaticity out toward the gamut edge, scaled by the colour's saturation.
-
-    A fully saturated colour lands on the gamut boundary (the light's most saturated
-    rendering of that hue); a greyscale colour stays at the gamut's white point.
-    """
-    saturation = (mx - mn) / mx if mx > 0.0 else 0.0
+@cache
+def _primary_weights(gamut: Gamut) -> tuple[float, float, float] | None:
+    """Return per-primary mix weights that put RGB white on D65, or None if D65 is outside."""
+    # D65's barycentric coordinates in the gamut triangle: the chromaticity part of the
+    # standard RGB -> XYZ matrix built from these primaries with D65 as white.
+    (rx, ry), (gx, gy), (bx, by) = gamut.red, gamut.green, gamut.blue
     wx, wy = _WHITE_D65
-    # Exaggerate the hue direction far past the gamut, then clamp back: the clamp lands on
-    # the boundary point for this hue (its most saturated reproducible chromaticity).
-    far = (wx + (point[0] - wx) * 100.0, wy + (point[1] - wy) * 100.0)
-    ex, ey = _clamp_to_gamut(far, gamut)
-    return (wx + (ex - wx) * saturation, wy + (ey - wy) * saturation)
+    det = (gy - by) * (rx - bx) + (bx - gx) * (ry - by)
+    w_red = ((gy - by) * (wx - bx) + (bx - gx) * (wy - by)) / det
+    w_green = ((by - ry) * (wx - bx) + (rx - bx) * (wy - by)) / det
+    w_blue = 1.0 - w_red - w_green
+    if min(w_red, w_green, w_blue) <= 0.0:
+        return None
+    return (w_red, w_green, w_blue)
 
 
 def _gamma(channel: float) -> float:

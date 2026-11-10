@@ -88,9 +88,13 @@ RGB colours are encoded into the stream:
 
 | Mode | What it does | When it makes sense | Trade-off |
 | --- | --- | --- | --- |
-| `ColorMode.RGB` *(default)* | Raw RGB; the bridge maps it to each bulb's full native gamut | A vivid, dynamic show — widest colour range, most organic fades | Same RGB can look slightly different across mixed Hue models |
-| `ColorMode.XY` | Converts to the bulb's CIE xy gamut (colour-accurate, hardware-independent) | Consistent, matching colour across different Hue models | Narrower range; steadier (less organic) fades |
-| `ColorMode.VIVID` | Like `XY` but stretches saturated colours to the gamut edge | Cross-model consistency without losing punch | Hue is approximate (pushed to the edge), not colour-accurate |
+| `ColorMode.RGB` *(default)* | Raw RGB; the bridge maps it to each bulb's full native gamut | A vivid, dynamic show — widest colour range | Same RGB can look slightly different across mixed Hue models |
+| `ColorMode.XY` | Converts to the bulb's CIE xy gamut (colour-accurate, hardware-independent) | Consistent, matching colour across different Hue models | Narrower range: colours outside a bulb's gamut are clamped to its edge |
+| `ColorMode.VIVID` | Maps RGB onto the bulb's own gamut (primaries on the gamut corners, white on D65) | Saturated colour from each bulb's full gamut, with whites kept neutral | Not colour-accurate; bulbs with different gamuts render the same RGB differently |
+
+The xy modes use each light's colour gamut as reported by the bridge (exposed as
+`LightChannel.gamut`); a light with an unknown gamut is treated as gamut C. Gamut B does not
+contain D65 white, so `VIVID` falls back to `XY` for those lights.
 
 Per Philips' own guidance, **RGB gives the widest colour range per bulb** while **xy gives colour
 consistency** across lamp types — pick by whether range/dynamics or cross-model accuracy matters.
@@ -109,8 +113,8 @@ consistency** across lamp types — pick by whether range/dynamics or cross-mode
   single-active-stream constraint. The blocking DTLS work runs in an executor for you.
 - **Models** — `EntertainmentArea`, `LightChannel`, `LightColorCommand`.
 
-`LightColorCommand` carries 16-bit RGB; the encoder emits the duplicated-byte HueStream v2
-format and lets the bridge gamut-map per light.
+`LightColorCommand` carries 16-bit RGB; in the default RGB mode the encoder emits the
+duplicated-byte HueStream v2 format and lets the bridge gamut-map per light.
 
 ## Development
 

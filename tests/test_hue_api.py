@@ -9,6 +9,7 @@ import aiohttp
 import pytest
 
 from hue_entertainment.api import HueEntertainmentAPI
+from hue_entertainment.color import GAMUT_A, GAMUT_C, Gamut
 
 
 @pytest.fixture
@@ -235,3 +236,63 @@ async def test_get_entertainment_areas_resolves_names(api: HueEntertainmentAPI) 
     with patch.object(api, "_request", fake_request):
         areas = await api.get_entertainment_areas()
     assert areas[0].channels[0].name == "Couch Lamp"
+
+
+async def test_get_entertainment_areas_resolves_gamuts(api: HueEntertainmentAPI) -> None:
+    """Channel gamuts resolve through entertainment service -> renderer light -> colour gamut."""
+    paths: list[str] = []
+    triangle = {
+        "red": {"x": 0.6915, "y": 0.3083},
+        "green": {"x": 0.17, "y": 0.7},
+        "blue": {"x": 0.1532, "y": 0.0475},
+    }
+
+    def renderer(ent_id: str, light_id: str) -> dict[str, Any]:
+        return {"id": ent_id, "renderer_reference": {"rid": light_id, "rtype": "light"}}
+
+    async def fake_request(_method: str, path: str, _json_data: Any = None) -> dict[str, Any]:
+        """Return canned CLIP v2 resources per path."""
+        paths.append(path)
+        if path.endswith("entertainment_configuration"):
+            channels = [
+                {"channel_id": ch, "members": [{"service": {"rid": f"ent-{ch}"}}]}
+                for ch in range(4)
+            ]
+            channels.append({"channel_id": 4, "members": [{"service": {"rid": "light-0"}}]})
+            return {"data": [{"id": "area-1", "channels": channels}]}
+        if path.endswith("/light"):
+            return {
+                "data": [
+                    {"id": "light-0", "color": {"gamut": triangle, "gamut_type": "C"}},
+                    {"id": "light-1", "color": {"gamut_type": "A"}},
+                    {"id": "light-2", "color": {"gamut_type": "other"}},
+                    {"id": "light-3"},
+                ],
+            }
+        if path.endswith("/entertainment"):
+            return {"data": [renderer(f"ent-{ch}", f"light-{ch}") for ch in range(4)]}
+        return {"data": []}
+
+    with patch.object(api, "_request", fake_request):
+        areas = await api.get_entertainment_areas()
+
+    gamuts = [channel.gamut for channel in areas[0].channels]
+    reported = Gamut(red=(0.6915, 0.3083), green=(0.17, 0.7), blue=(0.1532, 0.0475))
+    assert gamuts == [reported, GAMUT_A, GAMUT_C, None, reported]
+    assert len(paths) == 4  # the gamuts reuse the name lookup's light/entertainment GETs
+
+
+async def test_get_entertainment_areas_without_service_lookup(api: HueEntertainmentAPI) -> None:
+    """A failing light/entertainment lookup leaves names generic and gamuts unknown."""
+
+    async def fake_request(_method: str, path: str, _json_data: Any = None) -> dict[str, Any]:
+        """Serve the area but fail every enrichment lookup."""
+        if path.endswith("entertainment_configuration"):
+            channel = {"channel_id": 0, "members": [{"service": {"rid": "ent-0"}}]}
+            return {"data": [{"id": "area-1", "channels": [channel]}]}
+        raise aiohttp.ClientError(path)
+
+    with patch.object(api, "_request", fake_request):
+        areas = await api.get_entertainment_areas()
+    assert areas[0].channels[0].name == "Channel 0"
+    assert areas[0].channels[0].gamut is None
