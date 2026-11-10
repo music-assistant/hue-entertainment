@@ -230,6 +230,10 @@ class ZigguratClient:
             await self.close()
             msg = f"Unsupported Ziggurat protocol version {version} (need {PROTOCOL_VERSION})"
             raise ZigguratError(msg)
+        if self._reader is None or self._reader.done():
+            await self.close()
+            msg = f"Ziggurat at {self._url} closed the connection right after its Hello"
+            raise ZigguratError(msg)
         self._connected = True
         LOGGER.debug("Connected to Ziggurat at %s (stack configured: %s)", self._url, configured)
 

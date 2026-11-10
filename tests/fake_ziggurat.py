@@ -83,6 +83,7 @@ class FakeZiggurat:
         """Initialize with protocol version 2 and no lights."""
         self.version = 2
         self.send_hello = True
+        self.close_after_hello = False
         self.lights: dict[int, FakeLight] = {}
         self.requests: list[Unicast] = []
         self.violations: list[str] = []
@@ -156,6 +157,9 @@ class FakeZiggurat:
         try:
             if self.send_hello:
                 await ws.send_bytes(_header(0x00, _NOTIFICATION, 0) + bytes([self.version, 0x01]))
+            if self.close_after_hello:
+                await ws.close()
+                return ws
             async for msg in ws:
                 if msg.type is WSMsgType.BINARY:
                     await self._on_request(ws, msg.data)

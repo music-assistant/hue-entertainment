@@ -65,6 +65,15 @@ async def test_cancelled_connect_releases_the_connection(ziggurat: FakeZiggurat)
     assert client._reader is None
 
 
+async def test_connect_fails_when_closed_right_after_hello(ziggurat: FakeZiggurat) -> None:
+    """A server that closes straight after its Hello does not leave the client 'connected'."""
+    ziggurat.close_after_hello = True
+    client = ZigguratClient(ziggurat.url)
+    with pytest.raises(ZigguratError):
+        await client.connect()
+    assert not client.connected
+
+
 async def test_send_unicast_resolves_confirms(ziggurat: FakeZiggurat) -> None:
     """An accepted unicast resolves its first-hop and APS ack verdicts."""
     ziggurat.add_light(FakeLight(0x1234, "00:17:88:01:00:00:00:01"))
