@@ -136,6 +136,8 @@ await session.stop()  # restores the captured state
       ZigbeeLight(channel_id=2, ieee="00:17:88:01:0c:bf:17:c8", nwk=0x1A2B, name="Signe", zone=2),
   ]
   ```
+- `stop()` gives each light back its on/off state, brightness and colour, and a gradient light
+  the gradient it showed before streaming.
 - The client can only send unicast frames, at background priority so ZHA's traffic always goes
   first; it never reconfigures the stack or the network.
 - When the stream is lost (ZHA restarts the stack, the connection drops, frames stop arriving),

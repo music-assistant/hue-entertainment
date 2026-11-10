@@ -21,9 +21,11 @@ from .frames import (
     ATTR_CURRENT_X,
     ATTR_CURRENT_Y,
     ATTR_ENTERTAINMENT_BALANCE,
+    ATTR_HUE_STATE,
     ATTR_ON_OFF,
     CLUSTER_COLOR,
     CLUSTER_ENTERTAINMENT,
+    CLUSTER_HUE_STATE,
     CLUSTER_LEVEL,
     CLUSTER_ON_OFF,
     CMD_SEGMENT_LAYOUT,
@@ -43,7 +45,9 @@ from .frames import (
     move_to_level_with_on_off,
     off,
     parse_default_response,
+    parse_gradient,
     parse_read_attributes_response,
+    parse_read_octet_strings,
     parse_segment_layout,
     parse_segment_map_response,
     parse_zcl,
@@ -51,6 +55,7 @@ from .frames import (
     segment_layout_request,
     segment_map,
     segment_record,
+    set_gradient,
     smoothing_from_seconds,
     write_attribute_uint8,
 )
@@ -61,6 +66,7 @@ if TYPE_CHECKING:
 
     from hue_entertainment.models import LightColorCommand, ZigbeeLight
 
+    from .frames import Gradient
     from .ziggurat import DeviceJoined, ReceivedAps
 
 LOGGER = logging.getLogger(__name__)
@@ -271,6 +277,7 @@ class ZigbeeEntertainmentSession:
             x=color.get(ATTR_CURRENT_X),
             y=color.get(ATTR_CURRENT_Y),
             mireds=color.get(ATTR_COLOR_TEMPERATURE),
+            gradient=await self._read_gradient(light),
         )
         balance = await self._read(
             light,
@@ -376,6 +383,10 @@ class ZigbeeEntertainmentSession:
             if snapshot.level is not None:
                 level = move_to_level_with_on_off(client.next_tsn(), snapshot.level, transition)
                 await client.deliver(light.nwk, CLUSTER_LEVEL, level, aps_ack=True)
+            if snapshot.gradient is not None:
+                gradient = set_gradient(client.next_tsn(), snapshot.gradient, transition)
+                if not await client.deliver(light.nwk, CLUSTER_HUE_STATE, gradient, aps_ack=True):
+                    LOGGER.warning("Could not restore the gradient of %s", light.label)
             if not snapshot.on:
                 await client.deliver(
                     light.nwk, CLUSTER_ON_OFF, off(client.next_tsn()), aps_ack=True
@@ -391,7 +402,33 @@ class ZigbeeEntertainmentSession:
         *,
         manufacturer: int | None = None,
     ) -> dict[int, int] | None:
-        """Read attributes from a light; None when it does not answer."""
+        """Read numeric attributes from a light; None when it does not answer."""
+        payload = await self._read_payload(light, cluster, attributes, manufacturer=manufacturer)
+        return None if payload is None else parse_read_attributes_response(payload)
+
+    async def _read_gradient(self, light: _Light) -> Gradient | None:
+        """Read the gradient a light shows; None when it shows none or does not answer."""
+        payload = await self._read_payload(
+            light, CLUSTER_HUE_STATE, [ATTR_HUE_STATE], manufacturer=HUE_MANUFACTURER_CODE
+        )
+        state = parse_read_octet_strings(payload or b"").get(ATTR_HUE_STATE)
+        if state is None:
+            return None
+        try:
+            return parse_gradient(state)
+        except ValueError:
+            LOGGER.debug("Malformed Hue state from %s: %s", light.label, state.hex())
+            return None
+
+    async def _read_payload(
+        self,
+        light: _Light,
+        cluster: int,
+        attributes: list[int],
+        *,
+        manufacturer: int | None = None,
+    ) -> bytes | None:
+        """Read attributes from a light; return the response payload, None without an answer."""
         asdu = read_attributes(self._client.next_tsn(), attributes, manufacturer=manufacturer)
         reply = await self._client.request(
             light.nwk, cluster, asdu, ZCL_CMD_READ_ATTRIBUTES_RESPONSE
@@ -399,7 +436,7 @@ class ZigbeeEntertainmentSession:
         if reply is None or reply.status:
             return None
         light.rssi.append(reply.rssi)
-        return parse_read_attributes_response(reply.payload)
+        return reply.payload
 
     async def _sender(self) -> None:
         """Stream the newest colours to the proxy light, with at most one frame in flight."""
@@ -709,6 +746,7 @@ class _Snapshot:
     x: int | None = None
     y: int | None = None
     mireds: int | None = None
+    gradient: Gradient | None = None
 
     def color_command(self, tsn: int, transition: int) -> bytes | None:
         """Return the ZCL command that restores the captured colour, if it is known."""
