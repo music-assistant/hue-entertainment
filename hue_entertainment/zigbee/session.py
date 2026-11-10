@@ -73,8 +73,9 @@ DEFAULT_MAX_RATE_HZ: Final[float] = 25.0
 # entertainment mode a few seconds after the frames stop.
 _KEEPALIVE_S: Final[float] = 1.0
 _FRAME_CONFIRM_TIMEOUT_S: Final[float] = 1.0
-# Updates with a failing frame for this long mean the stream is lost.
-_STREAM_LOSS_S: Final[float] = 1.0
+# Updates with a failing frame for this long mean the stream is lost. Lights keep their last colour
+# for a few seconds, so shorter radio hiccups (a busy channel, a stalled radio) are ridden out.
+_STREAM_LOSS_S: Final[float] = 3.0
 _REQUEST_TIMEOUT_S: Final[float] = 3.0
 _RESTORE_TRANSITION: Final[int] = 4  # tenths of a second
 _SMOOTHING_MAX_S: Final[float] = 0.1
