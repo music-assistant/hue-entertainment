@@ -124,9 +124,7 @@ class ZigbeeEntertainmentSession:
         :raises ValueError: For an invalid set of lights or a rate below 1.
         """
         self._lights = _group_lights(lights)
-        if not max_rate_hz >= 1:  # also rejects NaN
-            msg = "max_rate_hz must be at least 1"
-            raise ValueError(msg)
+        self.max_rate_hz = max_rate_hz
         self._client = _ZclClient(url, on_joined=self._on_joined, on_disconnect=self._on_disconnect)
         self._by_channel = {zone.channel_id: zone for light in self._lights for zone in light.zones}
         self._proxy = self._lights[0]
@@ -139,7 +137,6 @@ class ZigbeeEntertainmentSession:
         self._sender_task: asyncio.Task[None] | None = None
         self._idle_task: asyncio.Task[None] | None = None
         self._counter = 1
-        self._min_frame_interval = 1.0 / max_rate_hz
         self._interval = self._min_frame_interval
         self._last_send = 0.0
 
@@ -147,6 +144,24 @@ class ZigbeeEntertainmentSession:
     def is_streaming(self) -> bool:
         """Return True while frames are being streamed."""
         return self._streaming
+
+    @property
+    def max_rate_hz(self) -> float:
+        """
+        Return the most frames per second to send (see the constructor).
+
+        Can be changed at any time; a running stream takes the new rate within one frame, without
+        a restart. Setting a rate below 1 raises ValueError.
+        """
+        return self._max_rate_hz
+
+    @max_rate_hz.setter
+    def max_rate_hz(self, value: float) -> None:
+        if not value >= 1:  # also rejects NaN
+            msg = "max_rate_hz must be at least 1"
+            raise ValueError(msg)
+        self._max_rate_hz = value
+        self._min_frame_interval = 1.0 / value
 
     async def start(self) -> None:
         """

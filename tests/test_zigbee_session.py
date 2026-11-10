@@ -343,7 +343,45 @@ def test_rejects_a_rate_below_one_frame_per_second() -> None:
         ZigbeeEntertainmentSession("ws://127.0.0.1:1/", [light], max_rate_hz=0.5)
     with pytest.raises(ValueError, match="max_rate_hz"):
         ZigbeeEntertainmentSession("ws://127.0.0.1:1/", [light], max_rate_hz=float("nan"))
-    ZigbeeEntertainmentSession("ws://127.0.0.1:1/", [light], max_rate_hz=1)
+    session = ZigbeeEntertainmentSession("ws://127.0.0.1:1/", [light], max_rate_hz=1)
+    for rate in (0.5, float("nan")):
+        with pytest.raises(ValueError, match="max_rate_hz"):
+            session.max_rate_hz = rate
+    assert session.max_rate_hz == 1
+
+
+async def test_rate_changes_while_streaming_without_a_restart(
+    ziggurat: FakeZiggurat, make_session: SessionFactory
+) -> None:
+    """A new max_rate_hz paces the running stream, its fades follow; the lights are not reset."""
+    a = ziggurat.add_light(_hue_light(0x3401, "00:17:88:01:00:00:00:35"))
+    session = make_session([_zigbee_light(a, 0)])
+    await session.start()
+    started = len(ziggurat.requests)
+
+    async def stream(seconds: float) -> list[Unicast]:
+        first = len(ziggurat.frames)
+        for red in range(round(seconds / 0.01)):
+            session.send([LightColorCommand(0, red=red * 100)])
+            await asyncio.sleep(0.01)
+        # The first frame may still be paced by the previous rate.
+        return ziggurat.frames[first + 1 :]
+
+    await stream(0.2)
+    session.max_rate_hz = 5
+    slow = await stream(0.9)
+    session.max_rate_hz = 25
+    fast = await stream(0.5)
+
+    slow_starts = [frame.at for frame in slow]
+    assert 2 <= len(slow_starts) <= 5
+    assert min(b - a for a, b in itertools.pairwise(slow_starts)) >= 0.19
+    assert abs(_frame_fields(slow[-1])[1] - smoothing_from_seconds(0.2)) < 5
+    fast_starts = [frame.at for frame in fast]
+    assert len(fast_starts) >= 5
+    assert max(b - a for a, b in itertools.pairwise(fast_starts)) < 0.1
+    assert session.is_streaming
+    assert _kinds(ziggurat, a.nwk, after=started) == []
 
 
 async def test_keepalive_resends_last_frame(
