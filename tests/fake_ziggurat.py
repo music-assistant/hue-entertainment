@@ -82,6 +82,7 @@ class FakeZiggurat:
     def __init__(self) -> None:
         """Initialize with protocol version 2 and no lights."""
         self.version = 2
+        self.send_hello = True
         self.lights: dict[int, FakeLight] = {}
         self.requests: list[Unicast] = []
         self.violations: list[str] = []
@@ -153,7 +154,8 @@ class FakeZiggurat:
         self._sockets.add(ws)
         self.connections += 1
         try:
-            await ws.send_bytes(_header(0x00, _NOTIFICATION, 0) + bytes([self.version, 0x01]))
+            if self.send_hello:
+                await ws.send_bytes(_header(0x00, _NOTIFICATION, 0) + bytes([self.version, 0x01]))
             async for msg in ws:
                 if msg.type is WSMsgType.BINARY:
                     await self._on_request(ws, msg.data)
@@ -210,15 +212,15 @@ class FakeZiggurat:
         if status is None or ws.closed:
             return
         await ws.send_bytes(_header(0x11, _NOTIFICATION, req.rid) + bytes([status]))
-        if not req.aps_ack or status != SEND_SUCCESS:
+        if status != SEND_SUCCESS:
             return
         light = self.lights.get(req.nwk)
-        if light is None or not light.online:
-            await ws.send_bytes(
-                _header(0x12, _NOTIFICATION, req.rid) + bytes([SEND_APS_ACK_TIMEOUT])
-            )
+        online = light is not None and light.online
+        if req.aps_ack:
+            verdict = SEND_SUCCESS if online else SEND_APS_ACK_TIMEOUT
+            await ws.send_bytes(_header(0x12, _NOTIFICATION, req.rid) + bytes([verdict]))
+        if light is None or not online:
             return
-        await ws.send_bytes(_header(0x12, _NOTIFICATION, req.rid) + bytes([SEND_SUCCESS]))
         reply = _reply(light, req)
         if reply is not None:
             body = _RECEIVED_APS.pack(

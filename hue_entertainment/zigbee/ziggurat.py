@@ -223,6 +223,9 @@ class ZigguratClient:
             await self.close()
             msg = f"Cannot connect to Ziggurat at {self._url}: {err or type(err).__name__}"
             raise ZigguratError(msg) from err
+        except asyncio.CancelledError:
+            await self.close()
+            raise
         if version != PROTOCOL_VERSION:
             await self.close()
             msg = f"Unsupported Ziggurat protocol version {version} (need {PROTOCOL_VERSION})"
@@ -282,13 +285,6 @@ class ZigguratClient:
             raise ZigguratError(msg)
 
         rid = next(self._request_ids)
-        loop = asyncio.get_running_loop()
-        confirmed: asyncio.Future[int] = loop.create_future()
-        acked: asyncio.Future[int] | None = loop.create_future() if aps_ack else None
-        # Register the verdicts before sending: a confirm may arrive before the response.
-        self._track(self._confirms, rid, confirmed)
-        if acked is not None:
-            self._track(self._acks, rid, acked)
         payload = _SEND_UNICAST.pack(
             _FLAG_APS_ACK if aps_ack else 0,
             nwk,
@@ -304,6 +300,13 @@ class ZigguratClient:
             len(asdu),
         )
         frame = _header(_CMD_SEND_UNICAST, _FRAME_REQUEST, rid) + payload + asdu
+        loop = asyncio.get_running_loop()
+        confirmed: asyncio.Future[int] = loop.create_future()
+        acked: asyncio.Future[int] | None = loop.create_future() if aps_ack else None
+        # Register the verdicts before sending: a confirm may arrive before the response.
+        self._track(self._confirms, rid, confirmed)
+        if acked is not None:
+            self._track(self._acks, rid, acked)
         try:
             body = await self._request(ws, rid, frame)
         except BaseException:

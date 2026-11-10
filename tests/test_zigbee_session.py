@@ -143,7 +143,8 @@ async def test_start_snapshots_resets_and_picks_proxy_by_rssi(
 
     for fake in (far, near):
         sent = _requests_to(ziggurat, fake.nwk)
-        assert all(req.aps_ack for req in sent)
+        # Reads rely on their response; only the reset asks for an APS ack.
+        assert [req.aps_ack for req in sent] == [req.is_reset for req in sent]
         assert [req.cluster for req in sent if not req.zcl.cluster_specific] == [
             CLUSTER_ON_OFF,
             CLUSTER_LEVEL,
@@ -215,6 +216,27 @@ async def test_frame_rate_is_capped(ziggurat: FakeZiggurat, make_session: Sessio
     starts = [frame.at for frame in ziggurat.frames]
     assert 3 <= len(starts) <= 10
     assert min(b - a for a, b in itertools.pairwise(starts)) >= 0.035
+
+
+async def test_commands_during_pacing_are_not_sent_twice(
+    ziggurat: FakeZiggurat, make_session: SessionFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Commands that arrive while a frame waits for its slot go out once, in that frame."""
+    monkeypatch.setattr(zigbee_session, "_MIN_FRAME_INTERVAL_S", 0.15)
+    a = ziggurat.add_light(_hue_light(0x3201, "00:17:88:01:00:00:00:33"))
+    session = make_session([_zigbee_light(a, 0)])
+    await session.start()
+    session.send([RED])
+    assert await wait_until(lambda: len(ziggurat.frames) == 1)
+    blue = LightColorCommand(channel_id=0, blue=65535)
+    session.send([blue])
+    await asyncio.sleep(0.03)
+    session.send([blue])
+    await asyncio.sleep(0.4)
+    assert [_frame_fields(frame)[2] for frame in ziggurat.frames] == [
+        _record(a.nwk, RED),
+        _record(a.nwk, blue),
+    ]
 
 
 async def test_keepalive_resends_last_frame(
@@ -289,6 +311,7 @@ async def test_stop_restores_captured_state(
 
     assert restored(was_off.nwk) == [
         expected(CLUSTER_COLOR, move_to_color(0, 0x6000, 0x5000, 0)),
+        expected(CLUSTER_LEVEL, move_to_level_with_on_off(0, 200, 0)),
         expected(CLUSTER_ON_OFF, off(0)),
     ]
     assert restored(xy.nwk) == [
@@ -298,6 +321,26 @@ async def test_stop_restores_captured_state(
     assert restored(ct.nwk) == [
         expected(CLUSTER_COLOR, move_to_color_temperature(0, 250, 4)),
         expected(CLUSTER_LEVEL, move_to_level_with_on_off(0, 80, 4)),
+    ]
+
+
+async def test_restore_continues_when_the_colour_fails(
+    ziggurat: FakeZiggurat, make_session: SessionFactory
+) -> None:
+    """A lost colour restore does not keep a light that was off from switching off."""
+    a = ziggurat.add_light(_hue_light(0x5201, "00:17:88:01:00:00:00:55", on=False, level=90))
+    session = make_session([_zigbee_light(a, 0)])
+    await session.start()
+    ziggurat.confirm_for = lambda req: (
+        SEND_NWK_NO_ACK if req.cluster == CLUSTER_COLOR and req.zcl.cluster_specific else 0
+    )
+    mark = len(ziggurat.requests)
+    await session.stop()
+    assert [req.cluster for req in _requests_to(ziggurat, a.nwk, mark)] == [
+        CLUSTER_ENTERTAINMENT,
+        CLUSTER_COLOR,
+        CLUSTER_LEVEL,
+        CLUSTER_ON_OFF,
     ]
 
 
@@ -377,6 +420,20 @@ async def test_start_fails_when_stack_is_down(
     await session.start()
     assert session.is_streaming
     assert _requests_to(ziggurat, a.nwk, mark)[0].cluster == CLUSTER_ON_OFF
+
+
+async def test_start_fails_when_no_light_acknowledges(
+    ziggurat: FakeZiggurat, make_session: SessionFactory
+) -> None:
+    """With every light unreachable (e.g. switched off at the wall) start() raises."""
+    gone = ziggurat.add_light(FakeLight(0x7101, "00:17:88:01:00:00:00:71", online=False))
+    session = make_session([_zigbee_light(gone, 0)])
+    with pytest.raises(ZigguratError, match="No light acknowledged"):
+        await session.start()
+    assert not session.is_streaming
+    session.send([RED])
+    await asyncio.sleep(0.1)
+    assert ziggurat.frames == []
 
 
 async def test_not_configured_marks_stream_lost(

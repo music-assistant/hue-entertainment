@@ -51,6 +51,20 @@ async def test_connect_unreachable_server_raises(ziggurat: FakeZiggurat) -> None
         await client.connect()
 
 
+async def test_cancelled_connect_releases_the_connection(ziggurat: FakeZiggurat) -> None:
+    """Cancelling connect() while waiting for the Hello closes everything it opened."""
+    ziggurat.send_hello = False
+    client = ZigguratClient(ziggurat.url)
+    task = asyncio.create_task(client.connect())
+    assert await wait_until(lambda: client._ws is not None)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert client._session is None
+    assert client._ws is None
+    assert client._reader is None
+
+
 async def test_send_unicast_resolves_confirms(ziggurat: FakeZiggurat) -> None:
     """An accepted unicast resolves its first-hop and APS ack verdicts."""
     ziggurat.add_light(FakeLight(0x1234, "00:17:88:01:00:00:00:01"))

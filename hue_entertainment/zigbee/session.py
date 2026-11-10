@@ -151,11 +151,7 @@ class ZigbeeEntertainmentSession:
                 await self._client.connect()
                 if not self._engaged:
                     await self._for_each_light(self._prepare_light)
-                acked = await self._for_each_light(self._reset_light)
-                # Re-picked on every (re)start, so a proxy that went away is replaced.
-                self._proxy = self._choose_proxy(
-                    [light for light, ok in zip(self._lights, acked, strict=True) if ok]
-                )
+                self._proxy = await self._reset_lights()
             except BaseException:
                 await self._client.close()
                 if not self._engaged:
@@ -275,6 +271,17 @@ class ZigbeeEntertainmentSession:
             )
             await self._deliver(light.nwk, CLUSTER_ENTERTAINMENT, asdu, aps_ack=True)
 
+    async def _reset_lights(self) -> _Light:
+        """Reset every light for streaming and return the proxy to stream through."""
+        acked = await self._for_each_light(self._reset_light)
+        if not any(acked):
+            msg = "No light acknowledged the entertainment start"
+            raise ZigguratError(msg)
+        # Re-picked on every (re)start, so a proxy that went away is replaced.
+        return self._choose_proxy(
+            [light for light, ok in zip(self._lights, acked, strict=True) if ok]
+        )
+
     async def _reset_light(self, light: _Light) -> bool:
         """Send the entertainment reset that precedes a stream; return whether it was acked."""
         asdu = entertainment_reset(self._next_tsn(), self._counter)
@@ -293,22 +300,19 @@ class ZigbeeEntertainmentSession:
             snapshot = light.snapshot
             if snapshot is None:
                 return
-            # Lights that were off get their colour back too (instantly, as they fade out right
-            # after), so they later switch on in their own colour instead of the streamed one.
-            color = snapshot.color_command(
-                self._next_tsn(), _RESTORE_TRANSITION if snapshot.on else 0
-            )
+            # Lights that were off get their colour and level back too (instantly, right before
+            # they switch off), so they later switch on as they were, not in the streamed state.
+            transition = _RESTORE_TRANSITION if snapshot.on else 0
+            color = snapshot.color_command(self._next_tsn(), transition)
             if color is not None and not await self._deliver(
                 light.nwk, CLUSTER_COLOR, color, aps_ack=True
             ):
-                return
+                LOGGER.warning("Could not restore the colour of %s", light.label)
+            if snapshot.level is not None:
+                level = move_to_level_with_on_off(self._next_tsn(), snapshot.level, transition)
+                await self._deliver(light.nwk, CLUSTER_LEVEL, level, aps_ack=True)
             if not snapshot.on:
                 await self._deliver(light.nwk, CLUSTER_ON_OFF, off(self._next_tsn()), aps_ack=True)
-            elif snapshot.level is not None:
-                level = move_to_level_with_on_off(
-                    self._next_tsn(), snapshot.level, _RESTORE_TRANSITION
-                )
-                await self._deliver(light.nwk, CLUSTER_LEVEL, level, aps_ack=True)
         except ZigguratError as err:
             LOGGER.warning("Could not restore %s: %s", light.label, err)
 
@@ -327,7 +331,8 @@ class ZigbeeEntertainmentSession:
         self._pending_reads[key] = (light, response)
         try:
             asdu = read_attributes(tsn, attributes, manufacturer=manufacturer)
-            if not await self._deliver(light.nwk, cluster, asdu, aps_ack=True):
+            # The response itself proves delivery, so no APS ack is requested.
+            if not await self._deliver(light.nwk, cluster, asdu, aps_ack=False):
                 return None
             return await asyncio.wait_for(response, _REQUEST_TIMEOUT_S)
         except TimeoutError:
@@ -369,8 +374,9 @@ class ZigbeeEntertainmentSession:
                 with suppress(TimeoutError):
                     async with asyncio.timeout(_KEEPALIVE_S):
                         await self._wake.wait()
-                self._wake.clear()
                 await asyncio.sleep(max(0.0, next_frame_at - time.monotonic()))
+                # Cleared after the pacing sleep: commands that arrived during it are in this frame.
+                self._wake.clear()
                 records = [
                     light_record(light.nwk, *light.color)
                     for light in self._lights
@@ -434,8 +440,7 @@ class ZigbeeEntertainmentSession:
         return cast("list[_T]", results)
 
     def _choose_proxy(self, candidates: list[_Light]) -> _Light:
-        """Pick the candidate heard with the strongest signal (else the first light) as proxy."""
-        candidates = candidates or self._lights
+        """Pick the candidate heard with the strongest signal (else the first one) as proxy."""
         heard = [light for light in candidates if light.rssi]
         if not heard:
             return candidates[0]
