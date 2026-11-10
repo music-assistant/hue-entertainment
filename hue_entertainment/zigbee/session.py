@@ -98,15 +98,16 @@ class ZigbeeEntertainmentSession:
         :param lights: The lights to stream to, 1 to 10.
         :param idle_timeout: Seconds without :meth:`send` after which the stream is stopped;
             0 disables.
-        :param max_rate_hz: Most frames per second to send; the lights fade over the time
-            between frames, so a low rate (e.g. 5 for slowly changing colours) still looks smooth
-            while using a fraction of the Zigbee airtime.
+        :param max_rate_hz: Most frames per second to send, at least 1 (the lights leave
+            entertainment mode a few seconds after the frames stop); the lights fade over the
+            time between frames, so a low rate (e.g. 5 for slowly changing colours) still looks
+            smooth while using a fraction of the Zigbee airtime.
         """
         if not 0 < len(lights) <= MAX_RECORDS:
             msg = f"A Zigbee entertainment session streams to 1-{MAX_RECORDS} lights"
             raise ValueError(msg)
-        if max_rate_hz <= 0:
-            msg = "max_rate_hz must be positive"
+        if max_rate_hz < 1:
+            msg = "max_rate_hz must be at least 1"
             raise ValueError(msg)
         self._client = ZigguratClient(
             url,

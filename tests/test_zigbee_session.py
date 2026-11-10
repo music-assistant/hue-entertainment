@@ -258,11 +258,12 @@ async def test_low_rate_session_sends_slowly_and_fades_over_the_gap(
     assert abs(_frame_fields(ziggurat.frames[-1])[1] - smoothing_from_seconds(0.2)) < 5
 
 
-def test_rejects_a_non_positive_rate() -> None:
-    """The rate cap must be positive."""
+def test_rejects_a_rate_below_one_frame_per_second() -> None:
+    """Below 1 Hz the frames would come too rarely to keep the lights in entertainment mode."""
     light = ZigbeeLight(0, "00:00:00:00:00:00:00:01", 1)
     with pytest.raises(ValueError, match="max_rate_hz"):
-        ZigbeeEntertainmentSession("ws://127.0.0.1:1/", [light], max_rate_hz=0)
+        ZigbeeEntertainmentSession("ws://127.0.0.1:1/", [light], max_rate_hz=0.5)
+    ZigbeeEntertainmentSession("ws://127.0.0.1:1/", [light], max_rate_hz=1)
 
 
 async def test_keepalive_resends_last_frame(
