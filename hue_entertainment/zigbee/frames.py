@@ -43,6 +43,11 @@ MAX_BRIGHTNESS: Final[int] = 0x7FF
 ZCL_CMD_READ_ATTRIBUTES: Final[int] = 0x00
 ZCL_CMD_READ_ATTRIBUTES_RESPONSE: Final[int] = 0x01
 ZCL_CMD_WRITE_ATTRIBUTES: Final[int] = 0x02
+ZCL_CMD_DEFAULT_RESPONSE: Final[int] = 0x0B
+
+# Gradient commands of the entertainment cluster; a light answers each with the same command id.
+CMD_SEGMENT_LAYOUT: Final[int] = 0x04
+CMD_SEGMENT_MAP: Final[int] = 0x07
 
 # ZCL frame control bits.
 _FC_CLUSTER_SPECIFIC: Final[int] = 0x01
@@ -74,6 +79,7 @@ _DATA_TYPES: Final[dict[int, tuple[int, bool]]] = {
 _WIDE_GAMUT_MAX_X: Final[float] = 0.7347
 _WIDE_GAMUT_MAX_Y: Final[float] = 0.8264
 _RECORD_MODE_DEVICE: Final[int] = 0b01011
+_RECORD_MODE_SEGMENT: Final[int] = 0b00000
 # A smoothing value of 0xFFFF corresponds to a 2.56 s fade.
 _SMOOTHING_MAX_US: Final[int] = 2_560_000
 
@@ -156,6 +162,43 @@ def parse_read_attributes_response(payload: bytes) -> dict[int, int]:
     return values
 
 
+def parse_default_response(payload: bytes) -> tuple[int, int]:
+    """
+    Decode a ZCL Default Response.
+
+    :param payload: The command payload (after the ZCL header).
+    :return: The id of the command it answers and its ZCL status (0 = success).
+    :raises ValueError: When the payload is too short.
+    """
+    if len(payload) < 2:
+        msg = "Default Response too short"
+        raise ValueError(msg)
+    return payload[0], payload[1]
+
+
+def parse_segment_layout(payload: bytes) -> list[tuple[int, int]]:
+    """
+    Decode a gradient light's answer to :func:`segment_layout_request`.
+
+    :param payload: The command payload (after the ZCL header).
+    :return: The ``(start, length)`` of each segment, in segment order.
+    :raises ValueError: When the payload is truncated.
+    """
+    if len(payload) < 3 or len(payload) < 3 + 2 * payload[2]:
+        msg = "Segment layout response too short"
+        raise ValueError(msg)
+    return [(payload[3 + 2 * i], payload[4 + 2 * i]) for i in range(payload[2])]
+
+
+def parse_segment_map_response(payload: bytes) -> bool:
+    """
+    Return True when a gradient light accepted the map sent by :func:`segment_map`.
+
+    :param payload: The command payload (after the ZCL header).
+    """
+    return payload[:2] == b"\x00\x00"
+
+
 def read_attributes(
     tsn: int, attributes: Sequence[int], *, manufacturer: int | None = None
 ) -> bytes:
@@ -190,10 +233,11 @@ def entertainment_frame(tsn: int, counter: int, smoothing: int, records: Sequenc
     :param tsn: Transaction sequence number.
     :param counter: Frame counter; increment it for every frame of a stream.
     :param smoothing: Fade time towards the new colours, see :func:`smoothing_from_seconds`.
-    :param records: Up to :data:`MAX_RECORDS` light records from :func:`light_record`.
+    :param records: Up to :data:`MAX_RECORDS` records from :func:`light_record` or
+        :func:`segment_record`.
     """
     if len(records) > MAX_RECORDS:
-        msg = f"An entertainment frame holds at most {MAX_RECORDS} lights"
+        msg = f"An entertainment frame holds at most {MAX_RECORDS} records"
         raise ValueError(msg)
     payload = struct.pack("<IH", counter & 0xFFFFFFFF, smoothing) + b"".join(records)
     return _entertainment_command(tsn, _CMD_ENTERTAINMENT_FRAME, payload)
@@ -212,6 +256,33 @@ def entertainment_reset(tsn: int, counter: int) -> bytes:
     return _entertainment_command(tsn, _CMD_ENTERTAINMENT_RESET, payload)
 
 
+def segment_layout_request(tsn: int) -> bytes:
+    """
+    Encode the request for a gradient light's segment layout (cluster 0xFC01, command 0x04).
+
+    A light without segments answers with a Default Response error.
+
+    :param tsn: Transaction sequence number, echoed in the response.
+    """
+    return _entertainment_command(tsn, CMD_SEGMENT_LAYOUT, b"\x00")
+
+
+def segment_map(tsn: int, addresses: Sequence[int]) -> bytes:
+    """
+    Encode a gradient light's segment map (cluster 0xFC01, command 0x07).
+
+    It gives each segment the address of the :func:`segment_record` it shows; segments that
+    share an address show the same record.
+
+    :param tsn: Transaction sequence number, echoed in the response.
+    :param addresses: One address per segment of the light, in segment order.
+    """
+    payload = struct.pack(">H", len(addresses)) + b"".join(
+        struct.pack("<H", address) for address in addresses
+    )
+    return _entertainment_command(tsn, CMD_SEGMENT_MAP, payload)
+
+
 def light_record(nwk: int, brightness: int, x: float, y: float) -> bytes:
     """
     Encode one light's 7-byte record of an entertainment frame.
@@ -221,8 +292,19 @@ def light_record(nwk: int, brightness: int, x: float, y: float) -> bytes:
     :param x: CIE x chromaticity; values outside the record's range are clamped.
     :param y: CIE y chromaticity; values outside the record's range are clamped.
     """
-    brightness = max(1, min(MAX_BRIGHTNESS, brightness))
-    return struct.pack("<HH", nwk, (brightness << 5) | _RECORD_MODE_DEVICE) + quantize_xy(x, y)
+    return _record(nwk, _RECORD_MODE_DEVICE, brightness, x, y)
+
+
+def segment_record(address: int, brightness: int, x: float, y: float) -> bytes:
+    """
+    Encode the 7-byte record of gradient segments in an entertainment frame.
+
+    :param address: The address that the light's :func:`segment_map` gives the segments.
+    :param brightness: 11-bit brightness, clamped to 1..2047 (a record cannot switch a light off).
+    :param x: CIE x chromaticity; values outside the record's range are clamped.
+    :param y: CIE y chromaticity; values outside the record's range are clamped.
+    """
+    return _record(address, _RECORD_MODE_SEGMENT, brightness, x, y)
 
 
 def quantize_xy(x: float, y: float) -> bytes:
@@ -304,6 +386,12 @@ def _zcl(
         return struct.pack("<BBB", frame_control, tsn & 0xFF, command) + payload
     frame_control |= _FC_MANUFACTURER_SPECIFIC
     return struct.pack("<BHBB", frame_control, manufacturer, tsn & 0xFF, command) + payload
+
+
+def _record(address: int, mode: int, brightness: int, x: float, y: float) -> bytes:
+    """Encode a 7-byte entertainment record for a device or segment address."""
+    brightness = max(1, min(MAX_BRIGHTNESS, brightness))
+    return struct.pack("<HH", address, (brightness << 5) | mode) + quantize_xy(x, y)
 
 
 def _cluster_command(tsn: int, command: int, payload: bytes) -> bytes:

@@ -57,7 +57,7 @@ _ROUTE_STACK_DECIDES: Final[int] = 0
 _FLAG_APS_ACK: Final[int] = 0x02
 _MAX_REQUEST_ID: Final[int] = 0x3FFF
 # 0xFFF8 and above are broadcast addresses.
-_MAX_UNICAST_NWK: Final[int] = 0xFFF7
+MAX_UNICAST_NWK: Final[int] = 0xFFF7
 
 # flags, nwk, eui64, profile, cluster, src_ep, dst_ep, aps_seq, radius, priority, route, asdu_len
 _SEND_UNICAST: Final = struct.Struct("<BH8sHHBBBBbBH")
@@ -280,7 +280,7 @@ class ZigguratClient:
         if dst_ep == 0:
             msg = "Sending to the ZDO endpoint is not allowed"
             raise ValueError(msg)
-        if not 0 <= nwk <= _MAX_UNICAST_NWK:
+        if not 0 <= nwk <= MAX_UNICAST_NWK:
             msg = f"Not a unicast address: 0x{nwk:04x}"
             raise ValueError(msg)
         ws = self._ws
