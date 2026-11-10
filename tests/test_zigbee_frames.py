@@ -6,6 +6,7 @@ import pytest
 
 from hue_entertainment.zigbee.frames import (
     MAX_RECORDS,
+    Gradient,
     entertainment_frame,
     entertainment_reset,
     light_record,
@@ -14,7 +15,9 @@ from hue_entertainment.zigbee.frames import (
     move_to_level_with_on_off,
     off,
     parse_default_response,
+    parse_gradient,
     parse_read_attributes_response,
+    parse_read_octet_strings,
     parse_segment_layout,
     parse_segment_map_response,
     parse_zcl,
@@ -23,11 +26,15 @@ from hue_entertainment.zigbee.frames import (
     segment_layout_request,
     segment_map,
     segment_record,
+    set_gradient,
     smoothing_from_seconds,
     write_attribute_uint8,
 )
 
 _MAX_X, _MAX_Y = 0.7347, 0.8264
+# The Hue state (0xFC03 attribute 0x0002) of a real Signe showing five gradient colours.
+_SIGNE_COLOURS = "1350000000" + "848322" + "eed32a" + "90142b" + "12962f" + "170945"
+_SIGNE_STATE = "cb03" + "01" + "40" + "5629181d" + _SIGNE_COLOURS + "c0" + "2800" + "00"
 
 
 def _xy_for(qx: int, qy: int) -> tuple[float, float]:
@@ -198,3 +205,59 @@ def test_parse_read_attributes_response_stops_at_unknown_type() -> None:
     """An unknown data type ends decoding (its size is unknown)."""
     payload = bytes.fromhex("0000" + "00" + "20" + "fe" + "0100" + "00" + "42" + "0361" + "6263")
     assert parse_read_attributes_response(payload) == {0x0000: 0xFE}
+
+
+def test_parse_read_octet_strings_real_sample() -> None:
+    """The real Hue state reads as an octet string; numeric decoding skips over it."""
+    payload = bytes.fromhex(
+        "0200" + "00" + "41" + "20" + _SIGNE_STATE + "0500" + "00" + "20" + "fe"
+    )
+    assert parse_read_octet_strings(payload) == {0x0002: bytes.fromhex(_SIGNE_STATE)}
+    assert parse_read_attributes_response(payload) == {0x0005: 0xFE}
+
+
+@pytest.mark.parametrize(
+    ("state", "colours", "params"),
+    [
+        (_SIGNE_STATE, _SIGNE_COLOURS, "2800"),
+        # zigbee-herdsman-converters' sample of a gradient light (philips.ts decodeGradientColors)
+        (
+            "4b01" + "01" + "64" + "fb74346b" + "1350000000f3297fda7d55da7d55f3297fda7d55" + "2800",
+            "1350000000f3297fda7d55da7d55f3297fda7d55",
+            "2800",
+        ),
+        ("0001" + "0a20000000112233445566", "0a20000000112233445566", None),
+    ],
+)
+@pytest.mark.parametrize("transition", [0, 4])
+def test_set_gradient_restores_the_captured_gradient(
+    state: str, colours: str, params: str | None, transition: int
+) -> None:
+    """A state's gradient colours, scale and offset go into a manufacturer 0xFC03 command 0x00."""
+    gradient = parse_gradient(bytes.fromhex(state))
+    assert gradient == Gradient(bytes.fromhex(colours), params and bytes.fromhex(params))
+    flags = "5001" if params else "1001"
+    assert set_gradient(0x42, gradient, transition).hex() == (
+        "150b1042" + "00" + flags + f"{transition:02x}00" + colours + (params or "")
+    )
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        "0700010a6e01",  # a gradient lightstrip in colour temperature (bifrost)
+        "070001176f01",  # a colour bulb (bifrost)
+        "0b00010460b09c4e",  # a gradient light in one xy colour (zigbee-herdsman-converters)
+        "030001b2",  # a dimmable light (zigbee-herdsman-converters)
+    ],
+)
+def test_parse_gradient_without_a_gradient(state: str) -> None:
+    """A state without gradient colours holds no gradient."""
+    assert parse_gradient(bytes.fromhex(state)) is None
+
+
+@pytest.mark.parametrize("state", ["", "cb", "0001", "000105200000", _SIGNE_STATE[:-8]])
+def test_parse_gradient_rejects_truncated(state: str) -> None:
+    """A state shorter than its flags announce raises ValueError."""
+    with pytest.raises(ValueError, match="Hue state"):
+        parse_gradient(bytes.fromhex(state))

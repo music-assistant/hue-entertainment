@@ -20,6 +20,7 @@ from hue_entertainment.zigbee import session as zigbee_session
 from hue_entertainment.zigbee.frames import (
     CLUSTER_COLOR,
     CLUSTER_ENTERTAINMENT,
+    CLUSTER_HUE_STATE,
     CLUSTER_LEVEL,
     CLUSTER_ON_OFF,
     light_record,
@@ -27,6 +28,7 @@ from hue_entertainment.zigbee.frames import (
     move_to_color_temperature,
     move_to_level_with_on_off,
     off,
+    parse_zcl,
     segment_record,
     smoothing_from_seconds,
 )
@@ -43,6 +45,9 @@ if TYPE_CHECKING:
 
 RED = LightColorCommand(channel_id=0, red=65535)
 BLUE = LightColorCommand(channel_id=1, blue=65535)
+# The Hue state (0xFC03 attribute 0x0002) of a real Signe showing five gradient colours.
+_SIGNE_COLOURS = "1350000000848322eed32a90142b12962f170945"
+_SIGNE_STATE = bytes.fromhex("cb030140" + "5629181d" + _SIGNE_COLOURS + "c0280000")
 
 
 def _fake_xy(command: LightColorCommand) -> tuple[float, float, float]:
@@ -86,9 +91,14 @@ def _hue_light(
     mireds: int = 366,
     balance: int = 0xFE,
     segments: int | None = None,
+    hue_state: bytes | None = None,
 ) -> FakeLight:
-    """Return a fake Hue colour light with the given state; a gradient one with ``segments``."""
-    return FakeLight(
+    """
+    Return a fake Hue colour light with the given state; a gradient one with ``segments``.
+
+    Without ``hue_state`` it reports no 0xFC03 state attribute.
+    """
+    light = FakeLight(
         nwk,
         ieee,
         rssi=rssi,
@@ -103,6 +113,9 @@ def _hue_light(
             (CLUSTER_ENTERTAINMENT, 0x0005): (0x20, balance),
         },
     )
+    if hue_state is not None:
+        light.attributes[(CLUSTER_HUE_STATE, 0x0002)] = (0x41, hue_state)
+    return light
 
 
 def _zigbee_light(fake: FakeLight, channel_id: int) -> ZigbeeLight:
@@ -123,6 +136,12 @@ def _zones(fake: FakeLight, count: int, first_channel: int = 0) -> list[ZigbeeLi
 def _requests_to(ziggurat: FakeZiggurat, nwk: int, after: int = 0) -> list[Unicast]:
     """Return the non-frame requests sent to ``nwk``, from index ``after`` on."""
     return [req for req in ziggurat.requests[after:] if req.nwk == nwk and not req.is_frame]
+
+
+def _command(cluster: int, asdu: bytes) -> tuple[int, int, int | None, int, bytes]:
+    """Return a ZCL frame's cluster, frame control, manufacturer, command and payload."""
+    header, payload = parse_zcl(asdu)
+    return (cluster, header.frame_control, header.manufacturer, header.command, payload)
 
 
 def _kinds(ziggurat: FakeZiggurat, nwk: int, after: int = 0) -> list[str]:
@@ -211,6 +230,7 @@ async def test_start_snapshots_resets_and_picks_proxy_by_rssi(
             CLUSTER_ON_OFF,
             CLUSTER_LEVEL,
             CLUSTER_COLOR,
+            CLUSTER_HUE_STATE,
             CLUSTER_ENTERTAINMENT,
         ]
         assert sent[-1].is_reset
@@ -516,7 +536,7 @@ async def test_refused_balance_read_skips_the_write(
     a.read_default_status = {CLUSTER_ENTERTAINMENT: 0x84}  # unsupported manufacturer command
     session = make_session([_zigbee_light(a, 0)])
     await session.start()
-    assert _kinds(ziggurat, a.nwk) == ["read"] * 4 + ["reset"]
+    assert _kinds(ziggurat, a.nwk) == ["read"] * 5 + ["reset"]
 
 
 async def test_success_default_response_is_not_the_answer(
@@ -752,9 +772,9 @@ async def test_gradient_start_order(ziggurat: FakeZiggurat, make_session: Sessio
     spot = ziggurat.add_light(_hue_light(0x1101, "00:17:88:01:00:00:11:01", segments=4))
     session = make_session([*_zones(signe, 3), _zigbee_light(spot, 3)])
     await session.start()
-    assert _kinds(ziggurat, signe.nwk) == ["read"] * 4 + ["write", "layout", "map", "reset"]
+    assert _kinds(ziggurat, signe.nwk) == ["read"] * 5 + ["write", "layout", "map", "reset"]
     # A gradient light given one entry streams as one light: no segment commands.
-    assert _kinds(ziggurat, spot.nwk) == ["read"] * 4 + ["reset"]
+    assert _kinds(ziggurat, spot.nwk) == ["read"] * 5 + ["reset"]
     assert spot.segment_map is None
 
 
@@ -955,7 +975,7 @@ async def test_gradient_light_is_captured_and_restored_once(
     signe = ziggurat.add_light(_hue_light(0x5500, "00:17:88:01:00:00:55:00", segments=3))
     session = make_session(_zones(signe, 3))
     await session.start()
-    assert _kinds(ziggurat, signe.nwk).count("read") == 4
+    assert _kinds(ziggurat, signe.nwk).count("read") == 5
     session.send(_colours(3))
     assert await wait_until(lambda: len(ziggurat.frames) == 1)
     mark = len(ziggurat.requests)
@@ -964,6 +984,106 @@ async def test_gradient_light_is_captured_and_restored_once(
         CLUSTER_ENTERTAINMENT,
         CLUSTER_COLOR,
         CLUSTER_LEVEL,
+    ]
+
+
+async def test_stop_restores_the_gradient_after_colour_and_level(
+    ziggurat: FakeZiggurat, make_session: SessionFactory
+) -> None:
+    """A light that showed a gradient gets it back after its colour and level, before any off."""
+    lit = ziggurat.add_light(
+        _hue_light(0x5601, "00:17:88:01:00:00:56:01", segments=5, hue_state=_SIGNE_STATE)
+    )
+    was_off = ziggurat.add_light(
+        _hue_light(0x5602, "00:17:88:01:00:00:56:02", on=False, hue_state=_SIGNE_STATE)
+    )
+    session = make_session([*_zones(lit, 2), _zigbee_light(was_off, 2)])
+    await session.start()
+    for fake in (lit, was_off):
+        [read] = [
+            req for req in _requests_to(ziggurat, fake.nwk) if req.cluster == CLUSTER_HUE_STATE
+        ]
+        assert (read.zcl.cluster_specific, read.zcl.manufacturer, read.zcl.command) == (
+            False,
+            0x100B,
+            0x00,
+        )
+        assert read.zcl_payload == bytes.fromhex("0200")
+    session.send(_colours(3))
+    assert await wait_until(lambda: len(ziggurat.frames) == 1)
+    mark = len(ziggurat.requests)
+    await session.stop()
+
+    def restored(nwk: int) -> list[tuple[int, int, int | None, int, bytes]]:
+        sent = _requests_to(ziggurat, nwk, mark)
+        assert all(req.aps_ack for req in sent)
+        assert sent[0].is_reset
+        return [_command(req.cluster, req.asdu) for req in sent[1:]]
+
+    def gradient(transition: str) -> tuple[int, int, int | None, int, bytes]:
+        payload = bytes.fromhex("5001" + transition + _SIGNE_COLOURS + "2800")
+        return (CLUSTER_HUE_STATE, 0x15, 0x100B, 0x00, payload)
+
+    assert restored(lit.nwk) == [
+        _command(CLUSTER_COLOR, move_to_color(0, 0x6000, 0x5000, 4)),
+        _command(CLUSTER_LEVEL, move_to_level_with_on_off(0, 200, 4)),
+        gradient("0400"),
+    ]
+    assert restored(was_off.nwk) == [
+        _command(CLUSTER_COLOR, move_to_color(0, 0x6000, 0x5000, 0)),
+        _command(CLUSTER_LEVEL, move_to_level_with_on_off(0, 200, 0)),
+        gradient("0000"),
+        _command(CLUSTER_ON_OFF, off(0)),
+    ]
+
+
+async def test_lights_without_a_gradient_get_no_gradient_restore(
+    ziggurat: FakeZiggurat, make_session: SessionFactory
+) -> None:
+    """A light without a gradient state, or that cannot report one, is restored as before."""
+    plain = ziggurat.add_light(_hue_light(0x5701, "00:17:88:01:00:00:57:01"))
+    one_colour = ziggurat.add_light(
+        _hue_light(0x5702, "00:17:88:01:00:00:57:02", hue_state=bytes.fromhex("0b00010460b09c4e"))
+    )
+    refused = ziggurat.add_light(_hue_light(0x5703, "00:17:88:01:00:00:57:03"))
+    refused.read_default_status = {CLUSTER_HUE_STATE: 0xC3}  # unsupported cluster
+    malformed = ziggurat.add_light(
+        _hue_light(0x5704, "00:17:88:01:00:00:57:04", hue_state=_SIGNE_STATE[:-8])
+    )
+    fakes = (plain, one_colour, refused, malformed)
+    session = make_session([_zigbee_light(fake, i) for i, fake in enumerate(fakes)])
+    await session.start()
+    session.send(_colours(4))
+    assert await wait_until(lambda: len(ziggurat.frames) == 1)
+    mark = len(ziggurat.requests)
+    await session.stop()
+    for fake in fakes:
+        assert [req.cluster for req in _requests_to(ziggurat, fake.nwk, mark)] == [
+            CLUSTER_ENTERTAINMENT,
+            CLUSTER_COLOR,
+            CLUSTER_LEVEL,
+        ]
+
+
+async def test_refused_gradient_restore_is_a_warning(
+    ziggurat: FakeZiggurat, make_session: SessionFactory, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A gradient the light does not take is logged, and a light that was off still goes off."""
+    signe = ziggurat.add_light(
+        _hue_light(0x5801, "00:17:88:01:00:00:58:01", on=False, hue_state=_SIGNE_STATE)
+    )
+    session = make_session([_zigbee_light(signe, 0)])
+    await session.start()
+    ziggurat.confirm_for = lambda req: SEND_NWK_NO_ACK if req.cluster == CLUSTER_HUE_STATE else 0
+    mark = len(ziggurat.requests)
+    await session.stop()
+    assert "Could not restore the gradient of light 0" in caplog.text
+    assert [req.cluster for req in _requests_to(ziggurat, signe.nwk, mark)] == [
+        CLUSTER_ENTERTAINMENT,
+        CLUSTER_COLOR,
+        CLUSTER_LEVEL,
+        CLUSTER_HUE_STATE,
+        CLUSTER_ON_OFF,
     ]
 
 

@@ -36,8 +36,8 @@ class FakeLight:
     ieee: str
     rssi: int = -60
     online: bool = True
-    # (cluster, attribute) -> (ZCL data type, value)
-    attributes: dict[tuple[int, int], tuple[int, int]] = field(default_factory=dict)
+    # (cluster, attribute) -> (ZCL data type, value); a bytes value is an octet string
+    attributes: dict[tuple[int, int], tuple[int, int | bytes]] = field(default_factory=dict)
     # Gradient segment count; None refuses the segment commands like a light without segments.
     segments: int | None = None
     answers_segments: bool = True
@@ -310,8 +310,11 @@ def _reply(light: FakeLight, req: Unicast) -> bytes | None:
                 records += struct.pack("<HB", attribute, UNSUPPORTED_ATTRIBUTE)
                 continue
             data_type, raw = value
-            size = 2 if data_type in (0x19, 0x21, 0x29) else 1
-            records += struct.pack("<HBB", attribute, 0, data_type) + raw.to_bytes(size, "little")
+            if isinstance(raw, bytes):
+                encoded = bytes([len(raw)]) + raw
+            else:
+                encoded = raw.to_bytes(2 if data_type in (0x19, 0x21, 0x29) else 1, "little")
+            records += struct.pack("<HBB", attribute, 0, data_type) + encoded
         return prefix + bytes([0x01]) + records
     if header.command == 0x02:
         attribute, data_type, raw = struct.unpack_from("<HBB", payload)
