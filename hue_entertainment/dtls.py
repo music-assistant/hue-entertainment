@@ -202,9 +202,9 @@ class HueDtlsStreamer:
         for cmd in commands:
             # Per-channel: channel_id(1) + R(1,1) + G(1,1) + B(1,1) = 7 bytes
             # Color bytes are 0-255, each duplicated (Q42.HueApi convention)
-            r = min(255, cmd.red >> 8) if cmd.red > 255 else cmd.red
-            g = min(255, cmd.green >> 8) if cmd.green > 255 else cmd.green
-            b = min(255, cmd.blue >> 8) if cmd.blue > 255 else cmd.blue
+            r = min(255, cmd.red >> 8)
+            g = min(255, cmd.green >> 8)
+            b = min(255, cmd.blue >> 8)
             header.extend(bytes([cmd.channel_id & 0xFF, r, r, g, g, b, b]))
 
         return bytes(header)

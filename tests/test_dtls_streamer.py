@@ -106,9 +106,9 @@ class TestHueStreamMessage:
         for i, cmd in enumerate(commands):
             offset = FULL_HEADER_SIZE + i * CHANNEL_SIZE
             assert msg[offset] == cmd.channel_id
-            expected_r = min(255, cmd.red >> 8) if cmd.red > 255 else cmd.red
-            expected_g = min(255, cmd.green >> 8) if cmd.green > 255 else cmd.green
-            expected_b = min(255, cmd.blue >> 8) if cmd.blue > 255 else cmd.blue
+            expected_r = cmd.red >> 8
+            expected_g = cmd.green >> 8
+            expected_b = cmd.blue >> 8
             assert msg[offset + 1] == expected_r
             assert msg[offset + 2] == expected_r  # duplicated
             assert msg[offset + 3] == expected_g
@@ -130,13 +130,19 @@ class TestHueStreamMessage:
         r = msg[FULL_HEADER_SIZE + 1]
         assert r == 255
 
-    def test_small_color_values_not_shifted(self, streamer: HueDtlsStreamer) -> None:
-        """Test that color values <=255 are used directly (not shifted)."""
-        cmd = LightColorCommand(channel_id=0, red=100, green=200, blue=50)
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [(0, 0), (200, 0), (255, 0), (256, 1), (511, 1), (32768, 128), (65535, 255)],
+    )
+    def test_16bit_color_values_shifted(
+        self, streamer: HueDtlsStreamer, value: int, expected: int
+    ) -> None:
+        """Test that all 16-bit color values are right-shifted to 8-bit, small ones included."""
+        cmd = LightColorCommand(channel_id=0, red=value, green=value, blue=value)
         msg = streamer._build_huestream_message([cmd])
-        assert msg[FULL_HEADER_SIZE + 1] == 100  # R
-        assert msg[FULL_HEADER_SIZE + 3] == 200  # G
-        assert msg[FULL_HEADER_SIZE + 5] == 50  # B
+        assert msg[FULL_HEADER_SIZE + 1] == expected  # R
+        assert msg[FULL_HEADER_SIZE + 3] == expected  # G
+        assert msg[FULL_HEADER_SIZE + 5] == expected  # B
 
 
 class TestHueDtlsStreamerState:
