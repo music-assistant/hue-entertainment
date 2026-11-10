@@ -533,6 +533,21 @@ async def test_success_default_response_is_not_the_answer(
     assert [req.zcl_payload for req in level] == [move_to_level_with_on_off(0, 120, 4)[3:]]
 
 
+async def test_default_response_for_another_command_is_not_the_answer(
+    ziggurat: FakeZiggurat, make_session: SessionFactory
+) -> None:
+    """A Default Response error with the read's tsn but naming another command does not end it."""
+    a = ziggurat.add_light(_hue_light(0x7204, "00:17:88:01:00:00:00:77", level=120))
+    a.read_default_status = {CLUSTER_LEVEL: 0x81}  # unsupported cluster command
+    a.default_response_command = 0x04  # e.g. ZHA's Move to Level that reused the tsn
+    session = make_session([_zigbee_light(a, 0)])
+    await session.start()
+    mark = len(ziggurat.requests)
+    await session.stop()
+    level = [req for req in _requests_to(ziggurat, a.nwk, mark) if req.cluster == CLUSTER_LEVEL]
+    assert [req.zcl_payload for req in level] == [move_to_level_with_on_off(0, 120, 4)[3:]]
+
+
 async def test_start_fails_when_stack_is_down(
     ziggurat: FakeZiggurat, make_session: SessionFactory
 ) -> None:

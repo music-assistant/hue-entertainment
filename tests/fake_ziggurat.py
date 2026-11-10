@@ -43,8 +43,10 @@ class FakeLight:
     answers_segments: bool = True
     map_status: int = 0  # status the segment map response reports; 0 accepts the map
     segment_map: list[int] | None = None  # the addresses of the last accepted segment map
-    # cluster -> status of a Default Response to reads: an error replaces the answer, 0 precedes it
+    # cluster -> status of a Default Response to reads: an error for the read replaces the answer;
+    # a success, or one naming another command, precedes it
     read_default_status: dict[int, int] = field(default_factory=dict)
+    default_response_command: int | None = None  # the command it names; None: the read's own
 
 
 @dataclass
@@ -277,8 +279,12 @@ def _replies(light: FakeLight, req: Unicast) -> list[bytes]:
     status = light.read_default_status.get(req.cluster)
     if req.zcl.cluster_specific or req.zcl.command != 0x00 or status is None:
         return [] if reply is None else [reply]
-    default_response = _global_response_prefix(req.zcl) + bytes([0x0B, 0x00, status])
-    return [default_response] if status or reply is None else [default_response, reply]
+    answered = req.zcl.command
+    if light.default_response_command is not None:
+        answered = light.default_response_command
+    default_response = _global_response_prefix(req.zcl) + bytes([0x0B, answered, status])
+    replaces = status != 0 and answered == req.zcl.command
+    return [default_response] if replaces or reply is None else [default_response, reply]
 
 
 def _global_response_prefix(header: ZclHeader) -> bytes:

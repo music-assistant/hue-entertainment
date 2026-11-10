@@ -613,8 +613,10 @@ class _ZclClient(ZigguratClient):
             url, on_received=self._on_received_aps, on_joined=on_joined, on_disconnect=on_disconnect
         )
         self._tsn = itertools.count()
-        # (nwk, cluster, tsn) -> (cluster-specific, response command id, reply)
-        self._pending: dict[tuple[int, int, int], tuple[bool, int, asyncio.Future[_Reply]]] = {}
+        # (nwk, cluster, tsn) -> (cluster-specific, command id, response command id, reply)
+        self._pending: dict[
+            tuple[int, int, int], tuple[bool, int, int, asyncio.Future[_Reply]]
+        ] = {}
 
     def next_tsn(self) -> int:
         """Return the next ZCL transaction sequence number."""
@@ -657,7 +659,7 @@ class _ZclClient(ZigguratClient):
         sent = parse_zcl(asdu)[0]
         key = (nwk, cluster, sent.tsn)
         reply: asyncio.Future[_Reply] = asyncio.get_running_loop().create_future()
-        self._pending[key] = (sent.cluster_specific, response, reply)
+        self._pending[key] = (sent.cluster_specific, sent.command, response, reply)
         try:
             # The response itself proves delivery, so no APS ack is requested.
             if not await self.deliver(nwk, cluster, asdu, aps_ack=False):
@@ -675,15 +677,15 @@ class _ZclClient(ZigguratClient):
         except ValueError:
             return
         pending = self._pending.get((received.source, received.cluster, header.tsn))
-        if pending is None or pending[2].done() or not header.from_server:
+        if pending is None or pending[3].done() or not header.from_server:
             return
-        cluster_specific, response, reply = pending
+        cluster_specific, command, response, reply = pending
         if header.cluster_specific == cluster_specific and header.command == response:
             reply.set_result(_Reply(payload, received.rssi))
         elif not header.cluster_specific and header.command == ZCL_CMD_DEFAULT_RESPONSE:
             with suppress(ValueError):
-                status = parse_default_response(payload)[1]
-                if status:
+                answered, status = parse_default_response(payload)
+                if answered == command and status:
                     reply.set_result(_Reply(payload, received.rssi, status))
 
 
