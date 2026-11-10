@@ -235,7 +235,7 @@ def test_set_gradient_restores_the_captured_gradient(
 ) -> None:
     """A state's gradient colours, scale and offset go into a manufacturer 0xFC03 command 0x00."""
     gradient = parse_gradient(bytes.fromhex(state))
-    assert gradient == Gradient(bytes.fromhex(colours), params and bytes.fromhex(params))
+    assert gradient == Gradient(bytes.fromhex(colours), bytes.fromhex(params) if params else None)
     flags = "5001" if params else "1001"
     assert set_gradient(0x42, gradient, transition).hex() == (
         "150b1042" + "00" + flags + f"{transition:02x}00" + colours + (params or "")
