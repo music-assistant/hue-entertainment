@@ -35,3 +35,20 @@ class LightColorCommand:
     red: int = 0  # 0-65535
     green: int = 0  # 0-65535
     blue: int = 0  # 0-65535
+
+
+@dataclass
+class ZigbeeLight:
+    """
+    A Hue light on a Zigbee network, for the Zigbee entertainment transport.
+
+    :param channel_id: The channel id that :class:`LightColorCommand` addresses this light by.
+    :param ieee: IEEE address, e.g. ``"00:17:88:01:0c:bf:17:c8"``.
+    :param nwk: Current network (short) address.
+    :param name: Display name, used in logs.
+    """
+
+    channel_id: int
+    ieee: str
+    nwk: int
+    name: str = ""

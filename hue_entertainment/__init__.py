@@ -4,15 +4,17 @@ Async Python client for the Philips Hue Entertainment streaming API.
 Provides bridge discovery (mDNS), a pure-Python DTLS 1.2 PSK streaming client and a
 HueStream encoder for the Hue Entertainment API, working with both the Hue V2 ("square")
 bridge and the Hue Pro bridge. No openssl subprocess and no C bindings beyond the
-`cryptography` package.
+`cryptography` package. The `zigbee` subpackage streams the same frames straight onto a
+Zigbee network run by Ziggurat, without a Hue bridge.
 """
 
 from .api import HueEntertainmentAPI
 from .color import ColorMode, Gamut, gamut_for_type
 from .discovery import DiscoveredBridge, discover_bridges
 from .dtls import HueDtlsStreamer
-from .models import EntertainmentArea, LightChannel, LightColorCommand
+from .models import EntertainmentArea, LightChannel, LightColorCommand, ZigbeeLight
 from .session import EntertainmentSession
+from .zigbee import ZigbeeEntertainmentSession, ZigguratError
 
 __all__ = [
     "ColorMode",
@@ -24,6 +26,9 @@ __all__ = [
     "HueEntertainmentAPI",
     "LightChannel",
     "LightColorCommand",
+    "ZigbeeEntertainmentSession",
+    "ZigbeeLight",
+    "ZigguratError",
     "discover_bridges",
     "gamut_for_type",
 ]

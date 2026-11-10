@@ -2,7 +2,8 @@
 
 `hue-entertainment` is a standalone async Python client for the Philips Hue Entertainment
 streaming API: bridge discovery (mDNS), pairing, entertainment-area discovery, and
-low-latency DTLS-PSK / HueStream streaming to a Hue V2 or Pro bridge.
+low-latency DTLS-PSK / HueStream streaming to a Hue V2 or Pro bridge, or straight onto a
+Zigbee network run by Ziggurat (Home Assistant's ZHA) without a bridge.
 
 ## Behaviour
 
@@ -58,3 +59,7 @@ Do **not** use Google-style (`Args:`) or bullet-style (`- param:`) docstrings.
 - `dtls.py` - pure-Python DTLS 1.2 PSK streamer + HueStream v2 encoder.
 - `session.py` - `EntertainmentSession`: high-level async lifecycle facade.
 - `models.py` / `constants.py` - data models and protocol constants.
+- `zigbee/` - bridge-less transport that streams onto a Ziggurat (ZHA) Zigbee network:
+  - `ziggurat.py` - minimal ziggurat-server websocket client; it can only send unicasts.
+  - `frames.py` - pure ZCL encoders/decoders (Hue 0xFC01 entertainment, snapshot/restore).
+  - `session.py` - `ZigbeeEntertainmentSession`: the same lifecycle facade over Zigbee.
