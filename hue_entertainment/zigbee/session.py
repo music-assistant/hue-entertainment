@@ -59,7 +59,7 @@ LOGGER = logging.getLogger(__name__)
 _T = TypeVar("_T")
 
 # The Hue bridge streams at 25 Hz too; a cap leaves airtime for ZHA (each frame is also relayed).
-_MIN_FRAME_INTERVAL_S: Final[float] = 0.04
+DEFAULT_MAX_RATE_HZ: Final[float] = 25.0
 # Resend the last frame after this long without a new one; lights otherwise leave
 # entertainment mode a few seconds after the frames stop.
 _KEEPALIVE_S: Final[float] = 1.0
@@ -68,8 +68,6 @@ _FRAME_CONFIRM_TIMEOUT_S: Final[float] = 1.0
 _STREAM_LOSS_S: Final[float] = 1.0
 _REQUEST_TIMEOUT_S: Final[float] = 3.0
 _RESTORE_TRANSITION: Final[int] = 4  # tenths of a second
-_SMOOTHING_DEFAULT_S: Final[float] = 0.04
-_SMOOTHING_MIN_S: Final[float] = _MIN_FRAME_INTERVAL_S
 _SMOOTHING_MAX_S: Final[float] = 0.1
 _SMOOTHING_EMA_WEIGHT: Final[float] = 0.2
 
@@ -91,6 +89,7 @@ class ZigbeeEntertainmentSession:
         lights: Sequence[ZigbeeLight],
         *,
         idle_timeout: float = DEFAULT_IDLE_TIMEOUT_S,
+        max_rate_hz: float = DEFAULT_MAX_RATE_HZ,
     ) -> None:
         """
         Initialize the session (no network I/O until :meth:`start`).
@@ -99,9 +98,16 @@ class ZigbeeEntertainmentSession:
         :param lights: The lights to stream to, 1 to 10.
         :param idle_timeout: Seconds without :meth:`send` after which the stream is stopped;
             0 disables.
+        :param max_rate_hz: Most frames per second to send, at least 1 (the lights leave
+            entertainment mode a few seconds after the frames stop); the lights fade over the
+            time between frames, so a low rate (e.g. 5 for slowly changing colours) still looks
+            smooth while using a fraction of the Zigbee airtime.
         """
         if not 0 < len(lights) <= MAX_RECORDS:
             msg = f"A Zigbee entertainment session streams to 1-{MAX_RECORDS} lights"
+            raise ValueError(msg)
+        if not max_rate_hz >= 1:  # also rejects NaN
+            msg = "max_rate_hz must be at least 1"
             raise ValueError(msg)
         self._client = ZigguratClient(
             url,
@@ -125,7 +131,8 @@ class ZigbeeEntertainmentSession:
         ] = {}
         self._tsn = itertools.count()
         self._counter = 1
-        self._interval = _SMOOTHING_DEFAULT_S
+        self._min_frame_interval = 1.0 / max_rate_hz
+        self._interval = self._min_frame_interval
         self._last_send = 0.0
 
     @property
@@ -180,8 +187,12 @@ class ZigbeeEntertainmentSession:
         """
         now = time.monotonic()
         if self._streaming:
-            # The smoothing (fade time) follows the caller's frame interval.
-            interval = min(_SMOOTHING_MAX_S, max(_SMOOTHING_MIN_S, now - self._last_send))
+            # The smoothing (fade time) follows the interval between frames: the caller's, but
+            # never below the rate cap.
+            interval = min(
+                max(_SMOOTHING_MAX_S, self._min_frame_interval),
+                max(self._min_frame_interval, now - self._last_send),
+            )
             self._interval += _SMOOTHING_EMA_WEIGHT * (interval - self._interval)
             for command in commands:
                 light = self._by_channel.get(command.channel_id)
@@ -391,7 +402,7 @@ class ZigbeeEntertainmentSession:
                     records,
                 )
                 self._counter += 1
-                next_frame_at = time.monotonic() + _MIN_FRAME_INTERVAL_S
+                next_frame_at = time.monotonic() + self._min_frame_interval
                 if await self._deliver(self._proxy.nwk, CLUSTER_ENTERTAINMENT, asdu, aps_ack=False):
                     failing_since = None
                     continue
