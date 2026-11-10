@@ -263,6 +263,8 @@ def test_rejects_a_rate_below_one_frame_per_second() -> None:
     light = ZigbeeLight(0, "00:00:00:00:00:00:00:01", 1)
     with pytest.raises(ValueError, match="max_rate_hz"):
         ZigbeeEntertainmentSession("ws://127.0.0.1:1/", [light], max_rate_hz=0.5)
+    with pytest.raises(ValueError, match="max_rate_hz"):
+        ZigbeeEntertainmentSession("ws://127.0.0.1:1/", [light], max_rate_hz=float("nan"))
     ZigbeeEntertainmentSession("ws://127.0.0.1:1/", [light], max_rate_hz=1)
 
 

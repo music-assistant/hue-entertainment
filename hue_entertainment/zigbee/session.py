@@ -106,7 +106,7 @@ class ZigbeeEntertainmentSession:
         if not 0 < len(lights) <= MAX_RECORDS:
             msg = f"A Zigbee entertainment session streams to 1-{MAX_RECORDS} lights"
             raise ValueError(msg)
-        if max_rate_hz < 1:
+        if not max_rate_hz >= 1:  # also rejects NaN
             msg = "max_rate_hz must be at least 1"
             raise ValueError(msg)
         self._client = ZigguratClient(
