@@ -104,8 +104,8 @@ consistency** across lamp types — pick by whether range/dynamics or cross-mode
 `hue_entertainment.zigbee` streams the same frames straight onto a Zigbee network run by
 [Ziggurat](https://github.com/zigpy/ziggurat) (the Zigbee stack behind Home Assistant's ZHA),
 without a Hue bridge. It connects to `ziggurat-server` as an extra websocket client next to ZHA
-and speaks the Hue Zigbee entertainment protocol: one compact frame per update to a proxy light,
-which relays it to the other lights.
+and speaks the Hue Zigbee entertainment protocol: compact frames to a proxy light (one per update,
+or several beyond 10 channels), which relays them to the other lights.
 
 ```python
 from hue_entertainment import LightColorCommand, ZigbeeEntertainmentSession, ZigbeeLight

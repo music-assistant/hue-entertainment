@@ -237,7 +237,7 @@ def entertainment_frame(tsn: int, counter: int, smoothing: int, records: Sequenc
         :func:`segment_record`.
     """
     if len(records) > MAX_RECORDS:
-        msg = f"An entertainment frame holds at most {MAX_RECORDS} lights"
+        msg = f"An entertainment frame holds at most {MAX_RECORDS} records"
         raise ValueError(msg)
     payload = struct.pack("<IH", counter & 0xFFFFFFFF, smoothing) + b"".join(records)
     return _entertainment_command(tsn, _CMD_ENTERTAINMENT_FRAME, payload)

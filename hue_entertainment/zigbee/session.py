@@ -73,7 +73,7 @@ DEFAULT_MAX_RATE_HZ: Final[float] = 25.0
 # entertainment mode a few seconds after the frames stop.
 _KEEPALIVE_S: Final[float] = 1.0
 _FRAME_CONFIRM_TIMEOUT_S: Final[float] = 1.0
-# Frames failing for this long mean the stream is lost.
+# Updates with a failing frame for this long mean the stream is lost.
 _STREAM_LOSS_S: Final[float] = 1.0
 _REQUEST_TIMEOUT_S: Final[float] = 3.0
 _RESTORE_TRANSITION: Final[int] = 4  # tenths of a second
@@ -185,7 +185,7 @@ class ZigbeeEntertainmentSession:
 
     def send(self, commands: list[LightColorCommand]) -> None:
         """
-        Queue a frame of light colours; the newest frame wins when the network is busy.
+        Queue an update of light colours; the newest update wins when the network is busy.
 
         Non-blocking and safe to call from the event loop; a no-op when not streaming.
 
@@ -417,26 +417,26 @@ class ZigbeeEntertainmentSession:
                     continue
                 smoothing = smoothing_from_seconds(self._interval)
                 next_tick_at = time.monotonic() + self._min_frame_interval
-                for start in range(0, len(records), MAX_RECORDS):
+                delivered = True
+                for chunk in _split_evenly(records):
                     if not self._streaming:
                         break
                     asdu = entertainment_frame(
-                        self._client.next_tsn(),
-                        self._counter,
-                        smoothing,
-                        records[start : start + MAX_RECORDS],
+                        self._client.next_tsn(), self._counter, smoothing, chunk
                     )
                     self._counter += 1
-                    if await self._client.deliver(
+                    if not await self._client.deliver(
                         self._proxy.nwk, CLUSTER_ENTERTAINMENT, asdu, aps_ack=False
                     ):
-                        failing_since = None
-                        continue
-                    now = time.monotonic()
-                    if failing_since is None:
-                        failing_since = now
-                    elif now - failing_since >= _STREAM_LOSS_S:
-                        self._lose_stream("frames are no longer delivered")
+                        delivered = False
+                if delivered:
+                    failing_since = None
+                    continue
+                now = time.monotonic()
+                if failing_since is None:
+                    failing_since = now
+                elif now - failing_since >= _STREAM_LOSS_S:
+                    self._lose_stream("frames are no longer delivered")
         except ZigguratError as err:
             self._lose_stream(str(err))
         except Exception:
@@ -558,6 +558,14 @@ def _group_lights(lights: Sequence[ZigbeeLight]) -> list[_Light]:
         zones = [_Zone(entry.channel_id) for entry in entries]
         grouped.append(_Light(ieee, entries[0].nwk, entries[0].name, zones))
     return grouped
+
+
+def _split_evenly(records: list[bytes]) -> list[list[bytes]]:
+    """Split an update's records, in order, over the fewest frames and as evenly as possible."""
+    frames = -(-len(records) // MAX_RECORDS)
+    # Frame i ends at ceil(len * (i + 1) / frames), so earlier frames take the remainder.
+    bounds = [-(-len(records) * i // frames) for i in range(frames + 1)]
+    return [records[start:end] for start, end in itertools.pairwise(bounds)]
 
 
 def _zone_of_segments(zones: int, segments: int) -> list[int]:
@@ -734,7 +742,7 @@ class _Light:
         return self.name or self.ieee
 
     def records(self) -> list[bytes]:
-        """Return the light's records for the next frame; none before its first colour."""
+        """Return the light's records for the next update; none before its first colour."""
         if any(zone.address is not None for zone in self.zones):
             return [
                 segment_record(zone.address, *zone.color)

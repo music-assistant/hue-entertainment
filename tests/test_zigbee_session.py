@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import struct
+import time
 from typing import TYPE_CHECKING
 
 import pytest
@@ -86,7 +87,7 @@ def _hue_light(
     balance: int = 0xFE,
     segments: int | None = None,
 ) -> FakeLight:
-    """Return a fake Hue colour light with the given state (a gradient light with segments)."""
+    """Return a fake Hue colour light with the given state; a gradient one with ``segments``."""
     return FakeLight(
         nwk,
         ieee,
@@ -490,6 +491,48 @@ async def test_balance_attribute_written_only_when_different(
     assert unset.attributes[(CLUSTER_ENTERTAINMENT, 0x0005)] == (0x20, 0xFE)
 
 
+async def test_read_refused_with_a_default_response_is_unanswered_at_once(
+    ziggurat: FakeZiggurat, make_session: SessionFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Default Response error to the snapshot read ends it right away: streamed, not restored."""
+    monkeypatch.setattr(zigbee_session, "_REQUEST_TIMEOUT_S", 2.0)
+    a = ziggurat.add_light(_hue_light(0x7201, "00:17:88:01:00:00:00:74"))
+    a.read_default_status = {CLUSTER_ON_OFF: 0xC3}  # unsupported cluster
+    session = make_session([_zigbee_light(a, 0)])
+    started = time.monotonic()
+    await session.start()
+    assert time.monotonic() - started < 1.0
+    assert _kinds(ziggurat, a.nwk) == ["read", "reset"]
+    mark = len(ziggurat.requests)
+    await session.stop()
+    assert _kinds(ziggurat, a.nwk, mark) == ["reset"]
+
+
+async def test_refused_balance_read_skips_the_write(
+    ziggurat: FakeZiggurat, make_session: SessionFactory
+) -> None:
+    """A light that refuses the balance read with a Default Response gets no balance write."""
+    a = ziggurat.add_light(_hue_light(0x7202, "00:17:88:01:00:00:00:75", balance=0x00))
+    a.read_default_status = {CLUSTER_ENTERTAINMENT: 0x84}  # unsupported manufacturer command
+    session = make_session([_zigbee_light(a, 0)])
+    await session.start()
+    assert _kinds(ziggurat, a.nwk) == ["read"] * 4 + ["reset"]
+
+
+async def test_success_default_response_is_not_the_answer(
+    ziggurat: FakeZiggurat, make_session: SessionFactory
+) -> None:
+    """A success Default Response ahead of the read response does not end the read."""
+    a = ziggurat.add_light(_hue_light(0x7203, "00:17:88:01:00:00:00:76", level=120))
+    a.read_default_status = {CLUSTER_LEVEL: 0x00}
+    session = make_session([_zigbee_light(a, 0)])
+    await session.start()
+    mark = len(ziggurat.requests)
+    await session.stop()
+    level = [req for req in _requests_to(ziggurat, a.nwk, mark) if req.cluster == CLUSTER_LEVEL]
+    assert [req.zcl_payload for req in level] == [move_to_level_with_on_off(0, 120, 4)[3:]]
+
+
 async def test_start_fails_when_stack_is_down(
     ziggurat: FakeZiggurat, make_session: SessionFactory
 ) -> None:
@@ -801,29 +844,63 @@ async def test_zones_without_a_segment_are_ignored(
     )
 
 
-def _twelve_lights(ziggurat: FakeZiggurat) -> list[ZigbeeLight]:
-    """Add twelve plain lights to the fake and return their entries."""
-    fakes = [_hue_light(0x4400 + i, f"00:17:88:01:00:00:44:{i:02x}") for i in range(12)]
+def _plain_lights(ziggurat: FakeZiggurat, count: int) -> list[ZigbeeLight]:
+    """Add ``count`` plain lights (NWK 0x4400 on) to the fake and return their entries."""
+    fakes = [_hue_light(0x4400 + i, f"00:17:88:01:00:00:44:{i:02x}") for i in range(count)]
     return [_zigbee_light(ziggurat.add_light(fake), i) for i, fake in enumerate(fakes)]
 
 
-async def test_updates_beyond_ten_records_are_split_over_frames(
-    ziggurat: FakeZiggurat, make_session: SessionFactory
+@pytest.mark.parametrize(
+    ("count", "sizes"), [(10, [10]), (11, [6, 5]), (12, [6, 6]), (21, [7, 7, 7])]
+)
+async def test_updates_are_split_evenly_over_the_fewest_frames(
+    ziggurat: FakeZiggurat, make_session: SessionFactory, count: int, sizes: list[int]
 ) -> None:
-    """Twelve records go out as frames of 10 + 2 with consecutive counters, one in flight."""
-    session = make_session(_twelve_lights(ziggurat))
+    """An update's records fill the fewest frames evenly, in order, with consecutive counters."""
+    session = make_session(_plain_lights(ziggurat, count))
     await session.start()
-    commands = _colours(12)
+    commands = _colours(count)
     session.send(commands)
-    assert await wait_until(lambda: len(ziggurat.frames) == 2)
+    assert await wait_until(lambda: len(ziggurat.frames) == len(sizes))
     fields = [_frame_fields(frame) for frame in ziggurat.frames]
-    assert [len(records) // 7 for _, _, records in fields] == [10, 2]
-    assert fields[1][0] == fields[0][0] + 1
-    assert fields[0][2] + fields[1][2] == b"".join(
+    assert [len(records) // 7 for _, _, records in fields] == sizes
+    assert [counter for counter, _, _ in fields] == [fields[0][0] + i for i in range(len(sizes))]
+    assert b"".join(records for _, _, records in fields) == b"".join(
         _record(0x4400 + i, command) for i, command in enumerate(commands)
     )
     assert len({frame.nwk for frame in ziggurat.frames}) == 1
     assert ziggurat.max_frames_in_flight == 1
+
+
+async def test_a_frame_that_keeps_failing_loses_the_stream(
+    ziggurat: FakeZiggurat, make_session: SessionFactory
+) -> None:
+    """An update fails when any of its frames fails, so delivered sibling frames mask nothing."""
+    session = make_session(_plain_lights(ziggurat, 12))
+    await session.start()
+    second_frame = range(0x4406, 0x440C)
+
+    def reject_second_frame(req: Unicast) -> int:
+        if not req.is_frame:
+            return 0
+        first_record_nwk = struct.unpack_from("<H", req.zcl_payload, 6)[0]
+        return 0x22 if first_record_nwk in second_frame else 0  # PayloadTooLong
+
+    ziggurat.status_for = reject_second_frame
+    started = time.monotonic()
+
+    async def keep_sending() -> None:
+        while session.is_streaming:
+            session.send(_colours(12))
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(keep_sending(), 2)
+    assert time.monotonic() - started >= zigbee_session._STREAM_LOSS_S
+    assert any(
+        struct.unpack_from("<H", frame.zcl_payload, 6)[0] == 0x4400
+        for frame in ziggurat.frames
+        if frame.at >= started
+    )
 
 
 async def test_keepalive_resends_every_frame_of_the_tick(
@@ -831,7 +908,7 @@ async def test_keepalive_resends_every_frame_of_the_tick(
 ) -> None:
     """Without new commands both frames of the last update repeat with fresh counters."""
     monkeypatch.setattr(zigbee_session, "_KEEPALIVE_S", 0.05)
-    session = make_session(_twelve_lights(ziggurat))
+    session = make_session(_plain_lights(ziggurat, 12))
     await session.start()
     session.send(_colours(12))
     assert await wait_until(lambda: len(ziggurat.frames) >= 6)
@@ -844,7 +921,7 @@ async def test_rate_cap_paces_updates_not_frames(
     ziggurat: FakeZiggurat, make_session: SessionFactory
 ) -> None:
     """The frames of one update go back to back; updates stay 1 / max_rate_hz apart."""
-    session = make_session(_twelve_lights(ziggurat), max_rate_hz=5)
+    session = make_session(_plain_lights(ziggurat, 12), max_rate_hz=5)
     await session.start()
     for red in range(30):
         session.send([LightColorCommand(i, red=red * 1000 + i) for i in range(12)])
@@ -890,6 +967,30 @@ async def test_restart_sends_the_segment_map_again(
     await session.start()
     assert _kinds(ziggurat, signe.nwk, mark) == ["layout", "map", "reset"]
     assert signe.segment_map == [0x5600, 0x5601, 0x5601, 0x5602]
+
+
+async def test_restart_falls_back_to_one_colour_without_a_map(
+    ziggurat: FakeZiggurat, make_session: SessionFactory
+) -> None:
+    """A light mapped on the first start streams one colour after a restart that cannot map it."""
+    signe = ziggurat.add_light(_hue_light(0x5700, "00:17:88:01:00:00:57:00", segments=4))
+    session = make_session(_zones(signe, 3))
+    await session.start()
+    commands = _colours(3)
+    session.send(commands)
+    assert await wait_until(lambda: len(ziggurat.frames) == 1)
+    assert _frame_fields(ziggurat.frames[0])[2] == b"".join(
+        _segment(0x5700 + zone, commands[zone]) for zone in range(3)
+    )
+
+    await ziggurat.drop()
+    assert await wait_until(lambda: not session.is_streaming)
+    signe.answers_segments = False
+    await session.start()
+    mark = len(ziggurat.frames)
+    session.send(commands)
+    assert await wait_until(lambda: len(ziggurat.frames) > mark)
+    assert _frame_fields(ziggurat.frames[-1])[2] == _record(signe.nwk, commands[0])
 
 
 async def test_read_segment_counts(ziggurat: FakeZiggurat) -> None:

@@ -43,6 +43,8 @@ class FakeLight:
     answers_segments: bool = True
     map_status: int = 0  # status the segment map response reports; 0 accepts the map
     segment_map: list[int] | None = None  # the addresses of the last accepted segment map
+    # cluster -> status of a Default Response to reads: an error replaces the answer, 0 precedes it
+    read_default_status: dict[int, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -240,8 +242,7 @@ class FakeZiggurat:
             await ws.send_bytes(_header(0x12, _NOTIFICATION, req.rid) + bytes([verdict]))
         if light is None or not online:
             return
-        reply = _reply(light, req)
-        if reply is not None:
+        for reply in _replies(light, req):
             body = _RECEIVED_APS.pack(
                 light.nwk, 0, 0, 0, 0x0104, req.cluster, 0x0B, 0x01, 200, light.rssi, len(reply)
             )
@@ -270,6 +271,23 @@ def _header(command: int, frame_type: int, rid: int) -> bytes:
     return struct.pack("<BH", command, (rid << 2) | frame_type)
 
 
+def _replies(light: FakeLight, req: Unicast) -> list[bytes]:
+    """Return the frames a light sends back for ``req``, including a configured Default Response."""
+    reply = _reply(light, req)
+    status = light.read_default_status.get(req.cluster)
+    if req.zcl.cluster_specific or req.zcl.command != 0x00 or status is None:
+        return [] if reply is None else [reply]
+    default_response = _global_response_prefix(req.zcl) + bytes([0x0B, 0x00, status])
+    return [default_response] if status or reply is None else [default_response, reply]
+
+
+def _global_response_prefix(header: ZclHeader) -> bytes:
+    """Return the header of a global response to ``header``, without its command id."""
+    if header.manufacturer is None:
+        return bytes([0x18, header.tsn])
+    return struct.pack("<BHB", 0x1C, header.manufacturer, header.tsn)
+
+
 def _reply(light: FakeLight, req: Unicast) -> bytes | None:
     """Answer a global Read/Write Attributes or a segment request like a light would."""
     header, payload = parse_zcl(req.asdu)
@@ -277,13 +295,7 @@ def _reply(light: FakeLight, req: Unicast) -> bytes | None:
         return _segment_reply(light, header, payload)
     if header.cluster_specific:
         return None
-    mfr = header.manufacturer is not None
-    response_fc = 0x18 | (0x04 if mfr else 0)
-    prefix = (
-        struct.pack("<BHB", response_fc, header.manufacturer, header.tsn)
-        if mfr
-        else bytes([response_fc, header.tsn])
-    )
+    prefix = _global_response_prefix(header)
     if header.command == 0x00:
         records = b""
         for (attribute,) in struct.iter_unpack("<H", payload):
