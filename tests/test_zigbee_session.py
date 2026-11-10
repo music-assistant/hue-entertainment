@@ -353,7 +353,7 @@ def test_rejects_a_rate_below_one_frame_per_second() -> None:
 async def test_rate_changes_while_streaming_without_a_restart(
     ziggurat: FakeZiggurat, make_session: SessionFactory
 ) -> None:
-    """A new max_rate_hz paces the running stream and its fades; the lights are not reset."""
+    """A new max_rate_hz paces the running stream, its fades follow; the lights are not reset."""
     a = ziggurat.add_light(_hue_light(0x3401, "00:17:88:01:00:00:00:35"))
     session = make_session([_zigbee_light(a, 0)])
     await session.start()
