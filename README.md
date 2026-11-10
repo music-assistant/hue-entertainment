@@ -99,6 +99,35 @@ contain D65 white, so `VIVID` falls back to `XY` for those lights.
 Per Philips' own guidance, **RGB gives the widest colour range per bulb** while **xy gives colour
 consistency** across lamp types — pick by whether range/dynamics or cross-model accuracy matters.
 
+## Zigbee (Ziggurat) transport
+
+`hue_entertainment.zigbee` streams the same frames straight onto a Zigbee network run by
+[Ziggurat](https://github.com/zigpy/ziggurat) (the Zigbee stack behind Home Assistant's ZHA),
+without a Hue bridge. It connects to `ziggurat-server` as an extra websocket client next to ZHA
+and speaks the Hue Zigbee entertainment protocol: one compact frame per update to a proxy light,
+which relays it to the other lights.
+
+```python
+from hue_entertainment import LightColorCommand, ZigbeeEntertainmentSession, ZigbeeLight
+
+lights = [
+    ZigbeeLight(channel_id=0, ieee="00:17:88:01:0c:bf:17:c8", nwk=0x1A2B, name="Left"),
+    ZigbeeLight(channel_id=1, ieee="00:17:88:01:0c:bf:17:d4", nwk=0x3C4D, name="Right"),
+]
+session = ZigbeeEntertainmentSession("ws://homeassistant.local:9999", lights)
+await session.start()  # captures each light's state, then starts streaming
+session.send([LightColorCommand(channel_id=0, red=65535), LightColorCommand(channel_id=1, blue=65535)])
+await session.stop()  # restores the captured state
+```
+
+- Up to 10 Hue lights per session, within radio range of each other; the best-heard light is the proxy.
+- Frames go out at up to 25 Hz (the Hue bridge's own rate); when the network is busy the newest
+  frame wins.
+- The client can only send unicast frames, at background priority so ZHA's traffic always goes
+  first; it never reconfigures the stack or the network.
+- When the stream is lost (ZHA restarts the stack, the connection drops, frames stop arriving),
+  `is_streaming` turns False and the caller restarts or stops, as with `EntertainmentSession`.
+
 ## API
 
 - **`HueEntertainmentAPI(host, app_key=None)`** — low-level CLIP v2 wrapper:
@@ -111,7 +140,10 @@ consistency** across lamp types — pick by whether range/dynamics or cross-mode
   recommended high-level facade: on-demand `start(area_id)`, non-blocking `send(...)`,
   `stop()` / `aclose()`, automatic idle teardown, and enforcement of the bridge's
   single-active-stream constraint. The blocking DTLS work runs in an executor for you.
-- **Models** — `EntertainmentArea`, `LightChannel`, `LightColorCommand`.
+- **`ZigbeeEntertainmentSession(url, lights, *, idle_timeout=10.0)`** — the Zigbee transport:
+  `start()`, non-blocking `send(...)`, `stop()` / `aclose()`, `is_streaming`; raises
+  `ZigguratError` when ziggurat-server is unreachable or its Zigbee stack is down.
+- **Models** — `EntertainmentArea`, `LightChannel`, `LightColorCommand`, `ZigbeeLight`.
 
 `LightColorCommand` carries 16-bit RGB; in the default RGB mode the encoder emits the
 duplicated-byte HueStream v2 format and lets the bridge gamut-map per light.
