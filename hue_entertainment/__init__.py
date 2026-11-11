@@ -14,7 +14,7 @@ from .discovery import DiscoveredBridge, discover_bridges
 from .dtls import HueDtlsStreamer
 from .models import EntertainmentArea, LightChannel, LightColorCommand, ZigbeeLight
 from .session import EntertainmentSession
-from .zigbee import ZigbeeEntertainmentSession, ZigguratError
+from .zigbee import LightsBusyError, ZigbeeEntertainmentSession, ZigguratError
 
 __all__ = [
     "ColorMode",
@@ -26,6 +26,7 @@ __all__ = [
     "HueEntertainmentAPI",
     "LightChannel",
     "LightColorCommand",
+    "LightsBusyError",
     "ZigbeeEntertainmentSession",
     "ZigbeeLight",
     "ZigguratError",

@@ -20,6 +20,7 @@ from .frames import (
     ATTR_CURRENT_LEVEL,
     ATTR_CURRENT_X,
     ATTR_CURRENT_Y,
+    ATTR_ENTERTAINMENT_ACTIVE,
     ATTR_ENTERTAINMENT_BALANCE,
     ATTR_HUE_STATE,
     ATTR_ON_OFF,
@@ -89,6 +90,19 @@ _RESTORE_TRANSITION: Final[int] = 4  # tenths of a second
 _STOP_ATTEMPTS: Final[int] = 3
 _SMOOTHING_MAX_S: Final[float] = 0.1
 _SMOOTHING_EMA_WEIGHT: Final[float] = 0.2
+
+
+class LightsBusyError(Exception):
+    """Another client streams to some of the lights, so a session leaves them alone."""
+
+    def __init__(self, lights: list[str]) -> None:
+        """
+        Initialize the error.
+
+        :param lights: Names (or IEEE addresses) of the lights another client streams to.
+        """
+        super().__init__(f"Another client streams to {', '.join(lights)}")
+        self.lights = lights
 
 
 class ZigbeeEntertainmentSession:
@@ -175,7 +189,12 @@ class ZigbeeEntertainmentSession:
         to, but not restored. A light given several zones that turns out to have no segments,
         or does not take its segment map, streams one colour: that of its zone 0.
 
+        While another client streams to one of the lights, the first start streams to none of
+        them and leaves those lights as they are; it can be tried again later. A restart after
+        a lost stream does not check this.
+
         :raises ZigguratError: When Ziggurat is unreachable or its Zigbee stack is not running.
+        :raises LightsBusyError: When another client streams to one of the lights.
         """
         async with self._lock:
             if self._streaming:
@@ -184,7 +203,16 @@ class ZigbeeEntertainmentSession:
             try:
                 await self._client.connect()
                 if not self._engaged:
-                    await self._for_each_light(self._prepare_light)
+                    # Not on a restart: the lights still report our own lost stream for a while.
+                    busy = await self._for_each_light(self._prepare_light)
+                    if any(busy):
+                        raise LightsBusyError(  # noqa: TRY301 - the cleanup below applies
+                            [
+                                light.label
+                                for light, flag in zip(self._lights, busy, strict=True)
+                                if flag
+                            ]
+                        )
                 addresses = self._allocate_addresses()
                 await self._for_each_light(
                     lambda light: self._map_segments(light, addresses[light.ieee])
@@ -273,12 +301,16 @@ class ZigbeeEntertainmentSession:
         self._forget_lights()
         await self._client.close()
 
-    async def _prepare_light(self, light: _Light) -> None:
-        """Capture a light's state and make sure it accepts entertainment frames."""
+    async def _prepare_light(self, light: _Light) -> bool:
+        """
+        Capture a light's state and make sure it accepts entertainment frames.
+
+        :return: True when another client streams to the light; it is then left as it is.
+        """
         on_off = await self._read(light, CLUSTER_ON_OFF, [ATTR_ON_OFF])
         if on_off is None or ATTR_ON_OFF not in on_off:
             LOGGER.warning("%s did not answer; it is streamed to but not restored", light.label)
-            return
+            return False
         level = await self._read(light, CLUSTER_LEVEL, [ATTR_CURRENT_LEVEL]) or {}
         color = (
             await self._read(
@@ -297,15 +329,17 @@ class ZigbeeEntertainmentSession:
             mireds=color.get(ATTR_COLOR_TEMPERATURE),
             gradient=await self._read_gradient(light),
         )
-        balance = await self._read(
+        entertainment = await self._read(
             light,
             CLUSTER_ENTERTAINMENT,
-            [ATTR_ENTERTAINMENT_BALANCE],
+            [ATTR_ENTERTAINMENT_ACTIVE, ATTR_ENTERTAINMENT_BALANCE],
             manufacturer=HUE_MANUFACTURER_CODE,
         )
-        if balance is not None and balance.get(ATTR_ENTERTAINMENT_BALANCE) != (
-            ENTERTAINMENT_BALANCE_VALUE
-        ):
+        if entertainment is None:
+            return False
+        if entertainment.get(ATTR_ENTERTAINMENT_ACTIVE):
+            return True
+        if entertainment.get(ATTR_ENTERTAINMENT_BALANCE) != ENTERTAINMENT_BALANCE_VALUE:
             asdu = write_attribute_uint8(
                 self._client.next_tsn(),
                 ATTR_ENTERTAINMENT_BALANCE,
@@ -313,6 +347,7 @@ class ZigbeeEntertainmentSession:
                 manufacturer=HUE_MANUFACTURER_CODE,
             )
             await self._client.deliver(light.nwk, CLUSTER_ENTERTAINMENT, asdu, aps_ack=True)
+        return False
 
     def _allocate_addresses(self) -> dict[str, list[int]]:
         """Return the segment address of each zone, per light ieee; zone 0 keeps the light's NWK."""
