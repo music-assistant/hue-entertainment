@@ -84,6 +84,9 @@ _FRAME_CONFIRM_TIMEOUT_S: Final[float] = 1.0
 _STREAM_LOSS_S: Final[float] = 3.0
 _REQUEST_TIMEOUT_S: Final[float] = 3.0
 _RESTORE_TRANSITION: Final[int] = 4  # tenths of a second
+# A light whose acknowledgement of the entertainment stop got lost is sent the stop again, so
+# one lost acknowledgement does not leave it showing the last streamed colour.
+_STOP_ATTEMPTS: Final[int] = 3
 _SMOOTHING_MAX_S: Final[float] = 0.1
 _SMOOTHING_EMA_WEIGHT: Final[float] = 0.2
 
@@ -380,8 +383,11 @@ class ZigbeeEntertainmentSession:
         """End entertainment mode on a light and restore its captured state, best effort."""
         client = self._client
         try:
-            reset = entertainment_reset(client.next_tsn(), self._counter)
-            if not await client.deliver(light.nwk, CLUSTER_ENTERTAINMENT, reset, aps_ack=True):
+            for _attempt in range(_STOP_ATTEMPTS):
+                reset = entertainment_reset(client.next_tsn(), self._counter)
+                if await client.deliver(light.nwk, CLUSTER_ENTERTAINMENT, reset, aps_ack=True):
+                    break
+            else:
                 LOGGER.warning("%s did not acknowledge the entertainment stop", light.label)
                 return
             snapshot = light.snapshot

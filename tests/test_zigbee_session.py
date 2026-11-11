@@ -489,6 +489,41 @@ async def test_restore_continues_when_the_colour_fails(
     ]
 
 
+async def test_stop_is_sent_again_when_its_acknowledgement_is_lost(
+    ziggurat: FakeZiggurat, make_session: SessionFactory
+) -> None:
+    """A lost acknowledgement of the entertainment stop does not skip the restore."""
+    a = ziggurat.add_light(_hue_light(0x5301, "00:17:88:01:00:00:00:56", level=90))
+    session = make_session([_zigbee_light(a, 0)])
+    await session.start()
+    lost = [SEND_NWK_NO_ACK]
+    ziggurat.confirm_for = lambda req: lost.pop() if req.is_reset and lost else 0
+    mark = len(ziggurat.requests)
+    await session.stop()
+    assert [req.cluster for req in _requests_to(ziggurat, a.nwk, mark)] == [
+        CLUSTER_ENTERTAINMENT,
+        CLUSTER_ENTERTAINMENT,
+        CLUSTER_COLOR,
+        CLUSTER_LEVEL,
+    ]
+
+
+async def test_light_that_never_acknowledges_the_stop_is_not_restored(
+    ziggurat: FakeZiggurat, make_session: SessionFactory, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The stop is sent three times; without an acknowledgement the restore is skipped."""
+    a = ziggurat.add_light(_hue_light(0x5302, "00:17:88:01:00:00:00:57"))
+    session = make_session([_zigbee_light(a, 0)])
+    await session.start()
+    ziggurat.confirm_for = lambda req: SEND_NWK_NO_ACK if req.is_reset else 0
+    mark = len(ziggurat.requests)
+    await session.stop()
+    assert [req.cluster for req in _requests_to(ziggurat, a.nwk, mark)] == [
+        CLUSTER_ENTERTAINMENT
+    ] * 3
+    assert "light 0 did not acknowledge the entertainment stop" in caplog.text
+
+
 async def test_stop_is_idempotent(ziggurat: FakeZiggurat, make_session: SessionFactory) -> None:
     """A second stop() (or a stop before start) sends nothing."""
     a = ziggurat.add_light(_hue_light(0x5101, "00:17:88:01:00:00:00:54"))
