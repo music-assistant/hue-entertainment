@@ -320,8 +320,8 @@ class _DtlsConnection:
 
     def _send_cookie_client_hello(self, cookie: bytes) -> None:
         """Send flight 3: ClientHello with HelloVerify cookie."""
-        self._msg_seq = 0
-        self._send_seq = 0
+        # Second handshake message, sent in a new record (RFC 6347 4.2.2)
+        self._msg_seq = 1
         self._handshake_messages = bytearray()
         hello2 = self._build_client_hello(cookie=cookie)
         self._send_handshake(hello2, msg_type=_HT_CLIENT_HELLO)

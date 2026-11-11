@@ -9,6 +9,19 @@ import pytest
 from hue_entertainment.dtls import _SERVER_HELLO_RESENDS, _DtlsConnection
 
 
+def test_send_cookie_client_hello_numbering() -> None:
+    """The cookie ClientHello is message 1 and keeps the record sequence running."""
+    conn = MagicMock(spec=_DtlsConnection)
+    conn._msg_seq = 7
+    conn._send_seq = 3
+
+    _DtlsConnection._send_cookie_client_hello(conn, b"cookie")
+
+    assert conn._msg_seq == 1
+    assert conn._send_seq == 3
+    conn._build_client_hello.assert_called_once_with(cookie=b"cookie")
+
+
 def test_await_server_hello_resends_after_timeout() -> None:
     """A single ServerHello timeout triggers one cookie ClientHello resend."""
     conn = MagicMock(spec=_DtlsConnection)
