@@ -282,10 +282,11 @@ class _DtlsConnection:
         # Flight 2: HelloVerifyRequest
         LOGGER.debug("DTLS handshake %s:%d awaiting HelloVerifyRequest", self._host, self._port)
         data = self._recv()
-        cookie = self._parse_hello_verify_request(data)
+        if self._is_hello_verify_request(data):
+            cookie = self._parse_hello_verify_request(data)
 
-        # Flight 3-4: cookie ClientHello → ServerHello (resend on timeout)
-        data = self._await_server_hello(cookie)
+            # Flight 3-4: cookie ClientHello → ServerHello (resend on timeout)
+            data = self._await_server_hello(cookie)
         self._parse_server_flight(data)
 
         # Derive keys from PSK
@@ -475,6 +476,11 @@ class _DtlsConnection:
         self._send_encrypted(_CT_HANDSHAKE, full_msg)
 
     # -- Parsing --
+
+    def _is_hello_verify_request(self, data: bytes) -> bool:
+        """Return True if the record is a HelloVerifyRequest."""
+        # Handshake type follows the DTLS record header (13 bytes)
+        return data[0] == _CT_HANDSHAKE and data[13] == _HT_HELLO_VERIFY_REQUEST
 
     def _parse_hello_verify_request(self, data: bytes) -> bytes:
         """Extract the cookie from a HelloVerifyRequest record."""
