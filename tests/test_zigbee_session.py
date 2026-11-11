@@ -12,6 +12,7 @@ import pytest
 
 from hue_entertainment import LightColorCommand, ZigbeeLight
 from hue_entertainment.zigbee import (
+    LightsBusyError,
     ZigbeeEntertainmentSession,
     ZigguratError,
     read_segment_counts,
@@ -90,13 +91,15 @@ def _hue_light(
     y: int = 0x5000,
     mireds: int = 366,
     balance: int = 0xFE,
+    streamed: bool = False,
     segments: int | None = None,
     hue_state: bytes | None = None,
 ) -> FakeLight:
     """
     Return a fake Hue colour light with the given state; a gradient one with ``segments``.
 
-    Without ``hue_state`` it reports no 0xFC03 state attribute.
+    Without ``hue_state`` it reports no 0xFC03 state attribute. ``streamed`` makes it report
+    that another client streams to it.
     """
     light = FakeLight(
         nwk,
@@ -110,6 +113,7 @@ def _hue_light(
             (CLUSTER_COLOR, 0x0003): (0x21, x),
             (CLUSTER_COLOR, 0x0004): (0x21, y),
             (CLUSTER_COLOR, 0x0007): (0x21, mireds),
+            (CLUSTER_ENTERTAINMENT, 0x0001): (0x30, int(streamed)),
             (CLUSTER_ENTERTAINMENT, 0x0005): (0x20, balance),
         },
     )
@@ -745,6 +749,42 @@ async def test_restart_after_loss_keeps_the_original_snapshot(
     await session.stop()
     level = [req for req in _requests_to(ziggurat, a.nwk, mark) if req.cluster == CLUSTER_LEVEL]
     assert level[0].zcl_payload == move_to_level_with_on_off(0, 150, 4)[3:]
+
+
+async def test_start_leaves_lights_alone_while_another_client_streams(
+    ziggurat: FakeZiggurat, make_session: SessionFactory
+) -> None:
+    """A light another client streams to is only read and fails the start; a later one streams."""
+    free = ziggurat.add_light(_hue_light(0x9101, "00:17:88:01:00:00:01:01"))
+    busy = ziggurat.add_light(_hue_light(0x9102, "00:17:88:01:00:00:01:02", streamed=True))
+    session = make_session([_zigbee_light(free, 0), _zigbee_light(busy, 1)])
+    with pytest.raises(LightsBusyError) as err:
+        await session.start()
+    assert err.value.lights == ["light 1"]
+    assert not session.is_streaming
+    assert _kinds(ziggurat, busy.nwk) == ["read"] * 5
+    assert "reset" not in _kinds(ziggurat, free.nwk)
+
+    busy.attributes[(CLUSTER_ENTERTAINMENT, 0x0001)] = (0x30, 0)
+    mark = len(ziggurat.requests)
+    await session.start()
+    assert session.is_streaming
+    assert _kinds(ziggurat, busy.nwk, mark) == ["read"] * 5 + ["reset"]
+
+
+async def test_restart_after_loss_ignores_the_own_lost_stream(
+    ziggurat: FakeZiggurat, make_session: SessionFactory
+) -> None:
+    """Lights still reporting the session's own lost stream do not block its restart."""
+    a = ziggurat.add_light(_hue_light(0x9103, "00:17:88:01:00:00:01:03"))
+    session = make_session([_zigbee_light(a, 0)])
+    await session.start()
+    a.attributes[(CLUSTER_ENTERTAINMENT, 0x0001)] = (0x30, 1)
+    await ziggurat.drop()
+    assert await wait_until(lambda: not session.is_streaming)
+
+    await session.start()
+    assert session.is_streaming
 
 
 async def test_restart_replaces_a_proxy_that_went_away(

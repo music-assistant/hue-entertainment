@@ -138,6 +138,9 @@ await session.stop()  # restores the captured state
   ```
 - `stop()` gives each light back its on/off state, brightness and colour, and a gradient light
   the gradient it showed before streaming.
+- A light follows one streamer at a time. While another client (another app, or a second session)
+  streams to one of the lights, the first `start()` raises `LightsBusyError` without touching them;
+  a light frees up a few seconds after that client stops, so the caller can simply try again later.
 - The client can only send unicast frames, at background priority so ZHA's traffic always goes
   first; it never reconfigures the stack or the network.
 - When the stream is lost (ZHA restarts the stack, the connection drops, frames stop arriving),
@@ -158,7 +161,8 @@ await session.stop()  # restores the captured state
 - **`ZigbeeEntertainmentSession(url, lights, *, idle_timeout=10.0, max_rate_hz=25.0)`** — the Zigbee transport:
   `start()`, non-blocking `send(...)`, `stop()` / `aclose()`, `is_streaming`, and `max_rate_hz`
   (can be changed while streaming, without a restart); raises `ZigguratError` when
-  ziggurat-server is unreachable or its Zigbee stack is down.
+  ziggurat-server is unreachable or its Zigbee stack is down, and `LightsBusyError` when another
+  client streams to one of the lights.
 - **`hue_entertainment.zigbee.read_segment_counts(url, nwks)`** — the gradient segment count per
   light (1 for a light without segments; lights that do not answer are left out).
 - **Models** — `EntertainmentArea`, `LightChannel`, `LightColorCommand`, `ZigbeeLight`.

@@ -7,7 +7,13 @@ Assistant's ZHA), as an extra websocket client of ziggurat-server next to ZHA.
 
 from hue_entertainment.models import ZigbeeLight
 
-from .session import ZigbeeEntertainmentSession, read_segment_counts
+from .session import LightsBusyError, ZigbeeEntertainmentSession, read_segment_counts
 from .ziggurat import ZigguratError
 
-__all__ = ["ZigbeeEntertainmentSession", "ZigbeeLight", "ZigguratError", "read_segment_counts"]
+__all__ = [
+    "LightsBusyError",
+    "ZigbeeEntertainmentSession",
+    "ZigbeeLight",
+    "ZigguratError",
+    "read_segment_counts",
+]

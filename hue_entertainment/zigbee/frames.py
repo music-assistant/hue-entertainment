@@ -34,6 +34,9 @@ ATTR_CURRENT_Y: Final[int] = 0x0004
 ATTR_COLOR_TEMPERATURE: Final[int] = 0x0007
 ATTR_COLOR_MODE: Final[int] = 0x0008
 ATTR_HUE_STATE: Final[int] = 0x0002
+# Hue entertainment attribute that is 1 while any client streams to the light; a light leaves
+# entertainment mode by itself a few seconds after the frames stop.
+ATTR_ENTERTAINMENT_ACTIVE: Final[int] = 0x0001
 # Hue entertainment attribute ("light balance") that is set to 0xFE before streaming.
 ATTR_ENTERTAINMENT_BALANCE: Final[int] = 0x0005
 ENTERTAINMENT_BALANCE_VALUE: Final[int] = 0xFE
